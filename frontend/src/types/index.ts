@@ -18,6 +18,14 @@ export interface LoginResponse {
   real_name: string
 }
 
+// REQ-9 POST /api/auth/register（⏳ 契约已定，后端实现中）
+export interface RegisterResponse {
+  username: string // 后端自动生成的登录账号（姓名拼音+冲突后缀）
+  real_name: string
+  department: string
+  role: Role
+}
+
 // ── 统计 ──
 // REQ-4 GET /api/travel/stats（契约已就绪）
 export interface TravelStats {

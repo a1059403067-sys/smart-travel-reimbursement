@@ -41,14 +41,18 @@
         >
           登录
         </el-button>
+        <div class="login-footer">
+          <span class="muted">还没有账号？</span>
+          <el-button link type="primary" @click="router.push('/register')">注册账号</el-button>
+        </div>
       </el-form>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
@@ -56,11 +60,18 @@ import { useAuthStore } from '@/stores/auth'
 import type { AxiosError } from 'axios'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 const form = reactive({ username: '', password: '' })
+
+// 注册成功后跳转回来时预填登录账号（query 携带）
+onMounted(() => {
+  const u = route.query.username
+  if (typeof u === 'string' && u) form.username = u
+})
 
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
@@ -127,5 +138,13 @@ async function handleLogin() {
   margin: 0;
   color: #8c8c8c;
   font-size: 14px;
+}
+.login-footer {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 13px;
+}
+.login-footer .muted {
+  color: #8c8c8c;
 }
 </style>
