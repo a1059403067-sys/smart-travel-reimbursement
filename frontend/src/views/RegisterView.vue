@@ -99,7 +99,7 @@ import type { RegisterResponse } from '@/types'
 
 const router = useRouter()
 
-// REQ-10 就绪后以后端返回为准；未就绪时使用契约列出的 5 个部门兜底
+// 部门列表以 REQ-10 后端返回为准；接口异常时使用契约列出的 5 个部门兜底
 const FALLBACK_DEPARTMENTS = ['幕墙设计部', 'BIM部', '内装部', '城市更新部', '综合业务部']
 
 const formRef = ref<FormInstance>()

@@ -135,7 +135,7 @@ async function loadHistory(beforeId?: number) {
       await scrollToBottom(false)
       await ensureScrollable()
     } catch {
-      // REQ-11 未就绪（404）时静默：空历史，不影响正常聊天
+      // 接口异常时静默降级：空历史，不影响正常聊天
       hasMore.value = false
       lastLoadedMinId.value = undefined
     }

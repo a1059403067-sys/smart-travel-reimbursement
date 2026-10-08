@@ -18,7 +18,7 @@ export interface LoginResponse {
   real_name: string
 }
 
-// REQ-9 POST /api/auth/register（⏳ 契约已定，后端实现中）
+// REQ-9 POST /api/auth/register（契约已就绪）
 export interface RegisterResponse {
   username: string // 后端自动生成的登录账号（姓名拼音+冲突后缀）
   real_name: string
@@ -126,7 +126,7 @@ export interface TravelRequestListResponse {
   page_size: number
 }
 
-// ── 对话历史（REQ-11，契约已定，后端实现中）──
+// ── 对话历史（REQ-11，契约已就绪）──
 export interface ChatGuidanceCard {
   message: string
   action_label: string
