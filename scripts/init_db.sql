@@ -94,3 +94,28 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_user_session ON chat_messages (user_id, session_id, id);
+
+-- 发票（OCR 结果，REQ-7 上传解析后落库；接口落库逻辑属 A-19）
+CREATE TABLE IF NOT EXISTS invoices (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    reimbursement_id INTEGER REFERENCES reimbursements(id),
+    file_path VARCHAR(512),
+    file_type VARCHAR(16),
+    invoice_type VARCHAR(32),
+    invoice_number VARCHAR(32) UNIQUE,
+    amount NUMERIC(12,2),
+    tax_amount NUMERIC(12,2),
+    total_amount NUMERIC(12,2),
+    seller_name VARCHAR(256),
+    buyer_name VARCHAR(256),
+    invoice_date DATE,
+    ocr_status VARCHAR(16) NOT NULL DEFAULT 'parsed',
+    ocr_confidence NUMERIC(3,2),
+    ocr_raw JSONB,
+    is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices (user_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_reimbursement ON invoices (reimbursement_id);
