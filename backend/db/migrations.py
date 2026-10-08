@@ -98,6 +98,13 @@ _MIGRATIONS: list[tuple[str, str]] = [
         "idx_users_department",
         "CREATE INDEX IF NOT EXISTS idx_users_department ON users (department_id)",
     ),
+    # 2026-10-09 REQ-9：注册组合唯一（real_name + department 不能重复注册）；
+    # 部分索引不约束 department_id IS NULL 的种子账号（如 admin）
+    (
+        "idx_users_realname_department_unique",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_realname_department_unique "
+        "ON users (real_name, department_id) WHERE department_id IS NOT NULL",
+    ),
     # 2026-10-08 REQ-8：报销单 + 审批留痕（架构方案 reimbursements/approvals 表设计）
     (
         "reimbursements",
