@@ -1,13 +1,18 @@
-# 依赖注入（DB 会话）
+# 依赖注入（DB 会话 + JWT 鉴权）
 # backend/dependencies.py
 #
-# 参考 EduAgent backend/dependencies.py 的 DB 部分：
+# 参考 EduAgent backend/dependencies.py：
 # - 引擎在模块导入时创建，连接串来自 config.py（最终来自 .env.local）
 # - pool_size=30 / max_overflow=20 与 EduAgent 一致
 # - get_db：FastAPI 依赖，自动提交 / 回滚 / 关闭
-# - JWT 的 get_current_user 待 auth 模块（P0）实现时移植，当前接口先行不加鉴权
+# - get_current_user：JWT 解析（PyJWT，与 EduAgent 的 jose 同 API）
+# - require_role：角色守卫依赖工厂 —— 架构方案要求"role 必须参与鉴权"
+#   （补 EduAgent 的坑：其教师端点无角色校验，任何登录用户都能调）
 from typing import AsyncGenerator
 
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import jwt
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -39,6 +44,61 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()  # 出错 → 自动回滚
             raise
+
+
+# ── JWT 鉴权 ───────────────────────────────────────────────────
+# bearer_scheme：自动从请求头解析 "Authorization: Bearer <token>"，缺失/格式错直接 401
+
+bearer_scheme = HTTPBearer()
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> dict:
+    """FastAPI 依赖：验证 JWT，返回 {"user_id": str, "role": str, "tenant_id": str}。
+
+    Token 无效（签名错/过期/缺 sub）一律 401。
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="无效的认证凭证",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+        )
+        user_id: str = payload.get("sub")
+        role: str = payload.get("role", "employee")
+        tenant_id: str = payload.get("tenant_id", settings.default_tenant_id)
+        if not user_id:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+    return {"user_id": user_id, "role": role, "tenant_id": tenant_id}
+
+
+def require_role(*allowed_roles: str):
+    """角色守卫依赖工厂：require_role("approver", "finance") 用于审批/财务端点。
+
+    用法：
+
+        @router.post("/approve")
+        async def approve(..., current_user: dict = Depends(require_role("approver", "admin"))):
+            ...
+    """
+
+    async def _role_checker(current_user: dict = Depends(get_current_user)) -> dict:
+        if current_user["role"] not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"无权访问，需要角色：{'/'.join(allowed_roles)}",
+            )
+        return current_user
+
+    return _role_checker
 
 
 if __name__ == "__main__":

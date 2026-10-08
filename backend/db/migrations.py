@@ -39,12 +39,23 @@ _MIGRATIONS: list[tuple[str, str]] = [
             username VARCHAR(64) NOT NULL UNIQUE,
             password_hash VARCHAR(256) NOT NULL,
             real_name VARCHAR(64),
+            email VARCHAR(128),
+            phone VARCHAR(32),
             department_id INTEGER REFERENCES departments(id),
             role VARCHAR(16) NOT NULL DEFAULT 'employee',
             tenant_id VARCHAR(64) NOT NULL DEFAULT 'tenant_default',
             is_active BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""",
+    ),
+    # 2026-10-08 补丁：早期建表的 users 缺 email/phone（对齐架构方案表设计）
+    (
+        "users.email",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(128)",
+    ),
+    (
+        "users.phone",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(32)",
     ),
     (
         "travel_requests",

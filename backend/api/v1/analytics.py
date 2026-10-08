@@ -32,6 +32,22 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/travel", tags=["差旅统计"])
 
+# trip_type → 中文名（Dashboard 直接展示，前端不再翻译）
+_TRIP_TYPE_LABELS = {
+    "visit": "客户拜访",
+    "meeting": "会议",
+    "project": "项目驻场",
+    "entertain": "招待",
+}
+
+# 月度趋势窗口：近 6 个月（含当月）
+_TREND_MONTHS = 6
+
+
+def _percentage(value: float, total: float) -> float:
+    """占比：总额为 0 时记 0，避免除零。"""
+    return round(value * 100 / total, 1) if total else 0.0
+
 
 @router.get("/stats", summary="差旅统计（总出差人次 / 总费用 / 各部门招待费占比）")
 async def travel_stats(
@@ -85,8 +101,7 @@ async def travel_stats(
             {
                 "name": r.department,
                 "value": value,
-                # 占比：总额为 0 时记 0，避免除零
-                "percentage": round(value * 100 / total_amount, 1) if total_amount else 0.0,
+                "percentage": _percentage(value, total_amount),
             }
         )
 
@@ -96,6 +111,122 @@ async def travel_stats(
     return {
         "summary": {"total_trips": total_trips, "total_amount": total_amount},
         "department_expense": department_expense,
+    }
+
+
+@router.get("/dashboard", summary="Dashboard 聚合（REQ-1）：卡片 + 部门饼图 + 月度趋势 + 费用类型")
+async def travel_dashboard(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """前端 Dashboard 页一次请求拿全四块数据，ECharts 结构直接渲染：
+
+    - summary          数字卡片（总人次/总费用/待审批/本月新增）
+    - department_expense  饼图（各部门费用占比，同 /stats）
+    - monthly_trend    折线（近 6 个月人次+金额，缺月补 0）
+    - expense_by_type  柱状/饼图（行程类型费用占比，name 为中文）
+    """
+    # ① summary 卡片（FILTER 子句一次聚合，避免多条 SQL）
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT COUNT(*) AS trips,
+                       COALESCE(SUM(estimated_amount), 0) AS amount,
+                       COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+                       COUNT(*) FILTER (WHERE created_at >= date_trunc('month', NOW())) AS month_new
+                FROM travel_requests
+                """
+            )
+        )
+    ).one()
+    total_amount: float = round(float(row.amount or 0), 2)
+
+    # ② 部门占比（与 /stats 同口径）
+    dept_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT COALESCE(d.name, '未分配部门') AS department,
+                       COALESCE(SUM(tr.estimated_amount), 0) AS amount
+                FROM travel_requests tr
+                JOIN users u ON tr.user_id = u.id
+                LEFT JOIN departments d ON u.department_id = d.id
+                GROUP BY d.name
+                ORDER BY amount DESC
+                """
+            )
+        )
+    ).all()
+    department_expense = [
+        {
+            "name": r.department,
+            "value": (v := round(float(r.amount or 0), 2)),
+            "percentage": _percentage(v, total_amount),
+        }
+        for r in dept_rows
+    ]
+
+    # ③ 月度趋势：generate_series 生成近 6 个月轴，LEFT JOIN 补缺月为 0
+    trend_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT to_char(m.month, 'YYYY-MM') AS month,
+                       COUNT(tr.id)::int AS trips,
+                       COALESCE(SUM(tr.estimated_amount), 0) AS amount
+                FROM generate_series(
+                         date_trunc('month', NOW()) - make_interval(months => :months - 1),
+                         date_trunc('month', NOW()),
+                         interval '1 month'
+                     ) AS m(month)
+                LEFT JOIN travel_requests tr ON date_trunc('month', tr.start_date) = m.month
+                GROUP BY m.month
+                ORDER BY m.month
+                """
+            ),
+            {"months": _TREND_MONTHS},
+        )
+    ).all()
+    monthly_trend = [
+        {"month": r.month, "trips": int(r.trips), "amount": round(float(r.amount or 0), 2)}
+        for r in trend_rows
+    ]
+
+    # ④ 费用类型占比（trip_type 中文名映射）
+    type_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT trip_type, COALESCE(SUM(estimated_amount), 0) AS amount
+                FROM travel_requests
+                GROUP BY trip_type
+                ORDER BY amount DESC
+                """
+            )
+        )
+    ).all()
+    expense_by_type = [
+        {
+            "name": _TRIP_TYPE_LABELS.get(r.trip_type, r.trip_type or "其他"),
+            "value": (v := round(float(r.amount or 0), 2)),
+            "percentage": _percentage(v, total_amount),
+        }
+        for r in type_rows
+    ]
+
+    logger.info("stats.dashboard_queried", trips=row.trips, amount=total_amount,
+                trend_months=len(monthly_trend), types=len(expense_by_type))
+
+    return {
+        "summary": {
+            "total_trips": int(row.trips or 0),
+            "total_amount": total_amount,
+            "pending_approvals": int(row.pending or 0),
+            "month_new_trips": int(row.month_new or 0),
+        },
+        "department_expense": department_expense,
+        "monthly_trend": monthly_trend,
+        "expense_by_type": expense_by_type,
     }
 
 
@@ -185,6 +316,34 @@ if __name__ == "__main__":
             print(json.dumps(data2, ensure_ascii=False, indent=2))
             assert data2["summary"]["total_trips"] == 3
             assert abs(data2["summary"]["total_amount"] - 10500.0) < 0.01
-            print("\n断言通过 ✅：接口返回结构与 ECharts 渲染格式一致")
+
+            # ③ 追加 2 条待审批申请（本月出发），验证 dashboard 的 pending/趋势卡片
+            async with AsyncSessionLocal() as db:
+                await db.execute(sql_text(
+                    "INSERT INTO travel_requests (user_id, title, status, trip_type, departure_city, arrival_city, "
+                    "start_date, end_date, reason, estimated_amount) VALUES "
+                    "(2, '杭州项目二期驻场', 'pending', 'project', '北京', '杭州', CURRENT_DATE, CURRENT_DATE + 10, '项目驻场', 6800.00), "
+                    "(4, '深圳客户拜访', 'pending', 'visit', '北京', '深圳', CURRENT_DATE, CURRENT_DATE + 2, '拜访客户', 2950.00)"
+                ))
+                await db.commit()
+
+            print("\n" + "=" * 60)
+            print("GET /api/travel/dashboard（REQ-1：卡片 + 饼图 + 趋势 + 类型）")
+            print("=" * 60)
+            resp3 = await client.get("/api/travel/dashboard")
+            d = resp3.json()
+            print(json.dumps(d, ensure_ascii=False, indent=2))
+            assert resp3.status_code == 200
+            # 卡片：8 条种子 + 2 条 pending；种子 created_at 均为 NOW() → 本月新建 = 10
+            assert d["summary"]["total_trips"] == 10
+            assert d["summary"]["pending_approvals"] == 2
+            assert d["summary"]["month_new_trips"] == 10
+            # 趋势：恰好 6 个月；当月 = 种子 5 条(10月出发) + 2 条 pending = 7
+            assert len(d["monthly_trend"]) == 6
+            assert d["monthly_trend"][-1]["trips"] == 7
+            # 类型：中文名 + 4 类（visit/meeting/project/entertain）
+            names = [t["name"] for t in d["expense_by_type"]]
+            assert set(names) == {"客户拜访", "会议", "项目驻场", "招待"}
+            print("\n断言通过 ✅：stats 与 dashboard 返回结构与 ECharts 渲染格式一致")
 
     asyncio.run(main())
