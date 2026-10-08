@@ -1,13 +1,5 @@
 <template>
   <div class="invoice-parse">
-    <el-alert
-      type="info"
-      :closable="false"
-      show-icon
-      title="发票解析接口开发中（后端 A-10 / 契约 REQ-7 ⏳），当前页面仅演示 UI，暂不可提交解析"
-      class="pending-alert"
-    />
-
     <el-card shadow="never" class="upload-card">
       <template #header>发票解析（OCR + LLM 结构化）</template>
       <el-upload
@@ -46,7 +38,7 @@
         type="warning"
         :closable="false"
         show-icon
-        title="识别置信度较低，建议人工核对"
+        :title="sourceLabel(result.source)"
         class="review-alert"
       />
 
@@ -87,6 +79,10 @@ const parsing = ref(false)
 const currentFile = ref<File | null>(null)
 const result = ref<InvoiceParseResult | null>(null)
 
+// REQ-7 source 字段文案：text_layer 电子发票 / ocr_needed 扫描件转人工 / parse_failed
+const sourceLabel = (s: string) =>
+  s === 'ocr_needed' ? '扫描件无文本层，已转人工核验（OCR 规划中）' : '识别置信度较低，建议人工核对'
+
 function handleFileChange(file: UploadFile) {
   currentFile.value = (file.raw as File) ?? null
 }
@@ -95,22 +91,18 @@ function handleRemove() {
   currentFile.value = null
 }
 
-// R-02 修复：REQ-7 ⏳ 未就绪，不请求（避免必 404）。
-// TODO(A-10 就绪后)：置 true 并删除页面顶部 pending-alert
-const API_READY = false
-
 async function handleParse() {
   const file = currentFile.value
   if (!file) return
-  if (!API_READY) {
-    ElMessage.info('发票解析接口开发中（A-10），就绪后可用')
-    return
-  }
   parsing.value = true
   try {
     const { data } = await invoiceApi.upload(file)
     result.value = data
-    ElMessage.success('解析完成')
+    if (data.needs_human_review) {
+      ElMessage.warning('识别置信度较低，请人工核对解析结果')
+    } else {
+      ElMessage.success('解析完成')
+    }
   } catch {
     result.value = null
   } finally {

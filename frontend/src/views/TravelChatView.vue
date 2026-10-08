@@ -22,13 +22,25 @@
         </ChatBubble>
       </template>
 
-      <!-- 流式输出中的气泡 -->
-      <ChatBubble v-if="isStreaming || streamingContent" role="assistant">
+      <!-- 流式输出中的气泡（guidance-only 意图如 reimbursement 也会在此展示引导卡片） -->
+      <ChatBubble v-if="isStreaming || streamingContent || guidanceCards.length" role="assistant">
         <div v-if="routingLabel" class="routing-tag">
           <el-tag size="small" type="info">意图：{{ routingLabel }}</el-tag>
         </div>
         <div v-if="progressText" class="progress-text">⏳ {{ progressText }}</div>
-        <MarkdownRenderer :content="streamingContent || '…'" />
+        <MarkdownRenderer v-if="streamingContent" :content="streamingContent" />
+        <div v-if="guidanceCards.length" class="guidance-cards">
+          <el-card
+            v-for="(g, gi) in guidanceCards"
+            :key="gi"
+            shadow="hover"
+            class="guidance-card"
+            @click="router.push(g.action_url)"
+          >
+            <div class="guidance-msg">{{ g.message }}</div>
+            <el-button type="primary" size="small">{{ g.action_label || '前往' }}</el-button>
+          </el-card>
+        </div>
       </ChatBubble>
 
       <el-empty
@@ -99,7 +111,8 @@ async function handleSend() {
   await scrollToBottom()
 
   await sendStream(sessionId, text, scrollToBottom)
-  if (streamingContent.value) {
+  // 有文本或有引导卡片都算有效回复（reimbursement 等意图只推 guidance 无 token）
+  if (streamingContent.value || guidanceCards.value.length) {
     messages.value.push({
       role: 'assistant',
       content: streamingContent.value,
