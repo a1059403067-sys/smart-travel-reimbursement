@@ -83,8 +83,9 @@ async function handleLogin() {
     })
     router.push('/dashboard')
   } catch (err) {
-    // 401 是后端明确返回的（用户名/密码不对、账号禁用），拦截器不会弹消息，这里显示；
-    // 其他状态码拦截器已弹过 detail；无 response = 网络错误/跨域拦截，单独提示
+    // 契约（REQ-2）：401=用户名或密码错误；403=账号已被禁用。
+    // 401 拦截器不弹消息，这里展示 detail；403 拦截器已弹过契约文案；
+    // 无 response = 网络错误/跨域拦截，单独提示
     const e = err as AxiosError<{ detail?: string }>
     if (e.response?.status === 401) {
       ElMessage.error(e.response.data?.detail ?? '用户名或密码错误')

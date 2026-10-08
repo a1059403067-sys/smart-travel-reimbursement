@@ -12,6 +12,7 @@
           <el-input-number v-model="form.total_amount" :min="0" :precision="2" style="width: 220px" />
           <span class="amount-hint">元</span>
         </el-form-item>
+        <!-- TODO(R-23)：A-08（REQ-6）就绪后改为差旅申请下拉选择，替换手填 ID -->
         <el-form-item label="关联差旅申请">
           <el-input-number v-model="form.travel_request_id" :min="1" :precision="0" placeholder="选填" style="width: 220px" />
           <span class="field-hint">差旅申请 ID，选填</span>

@@ -36,6 +36,8 @@ export interface DashboardData extends TravelStats {
   }
   monthly_trend: Array<{ month: string; trips: number; amount: number }>
   expense_by_type: Array<{ name: string; value: number; percentage: number }>
+  // 报销单状态分布（五类补零：草稿/待审批/已通过/已驳回/已打款）
+  reimbursement_status: Array<{ name: string; value: number }>
 }
 
 // ── 报销单（REQ-8，契约已就绪）──
@@ -62,6 +64,8 @@ export interface Reimbursement {
   travel_request_title?: string | null // 关联差旅申请，可为 null
   reject_reason?: string | null
   approvals?: ApprovalRecord[]
+  // 契约外字段（R-19 待契约补充声明，后端已返回）：owner 判断依赖
+  user_id?: number
 }
 
 export interface ReimbursementListResponse {

@@ -31,10 +31,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onErrorCaptured } from 'vue'
+import { ref, onErrorCaptured, onMounted } from 'vue'
 import { ArrowDown } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { authApi } from '@/api/auth'
 import Sidebar from './Sidebar.vue'
 
 const auth = useAuthStore()
@@ -66,6 +67,11 @@ function handleCommand(cmd: string) {
     router.push('/profile')
   }
 }
+
+// 启动校验 token 有效性（REQ-3 /auth/me）：失效时由拦截器统一踢回登录页
+onMounted(() => {
+  authApi.me().catch(() => {})
+})
 </script>
 
 <style scoped>

@@ -24,7 +24,7 @@
         <span>发票解析</span>
       </RouterLink>
 
-      <!-- 审批管理（仅 manager/admin 可见） -->
+      <!-- 审批管理（仅 approver/admin 可见，契约角色枚举） -->
       <template v-if="auth.canApprove">
         <RouterLink to="/approvals" class="nav-item" :class="{ 'nav-item--active': isActive('/approvals') }">
           <el-icon><Stamp /></el-icon>

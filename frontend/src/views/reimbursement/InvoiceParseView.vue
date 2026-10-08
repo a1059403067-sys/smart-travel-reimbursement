@@ -1,5 +1,13 @@
 <template>
   <div class="invoice-parse">
+    <el-alert
+      type="info"
+      :closable="false"
+      show-icon
+      title="发票解析接口开发中（后端 A-10 / 契约 REQ-7 ⏳），当前页面仅演示 UI，暂不可提交解析"
+      class="pending-alert"
+    />
+
     <el-card shadow="never" class="upload-card">
       <template #header>发票解析（OCR + LLM 结构化）</template>
       <el-upload
@@ -87,12 +95,20 @@ function handleRemove() {
   currentFile.value = null
 }
 
+// R-02 修复：REQ-7 ⏳ 未就绪，不请求（避免必 404）。
+// TODO(A-10 就绪后)：置 true 并删除页面顶部 pending-alert
+const API_READY = false
+
 async function handleParse() {
-  if (!currentFile.value) return
+  const file = currentFile.value
+  if (!file) return
+  if (!API_READY) {
+    ElMessage.info('发票解析接口开发中（A-10），就绪后可用')
+    return
+  }
   parsing.value = true
   try {
-    // 契约 ⏳：POST /api/invoice/upload 后端 A-10 就绪后可用
-    const { data } = await invoiceApi.upload(currentFile.value)
+    const { data } = await invoiceApi.upload(file)
     result.value = data
     ElMessage.success('解析完成')
   } catch {
@@ -111,6 +127,9 @@ function handleCreateFromInvoice() {
 <style scoped>
 .invoice-parse {
   max-width: 800px;
+}
+.pending-alert {
+  margin-bottom: 16px;
 }
 .upload-card {
   margin-bottom: 16px;

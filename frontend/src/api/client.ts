@@ -21,17 +21,21 @@ client.interceptors.response.use(
   (error: AxiosError<{ detail: string }>) => {
     const status = error.response?.status
     const detail = error.response?.data?.detail
+    // login 请求的 401/403 由 LoginView 展示契约文案，此处不重复处理
+    const isLoginRequest = error.config?.url?.includes('/auth/login')
 
-    if (status === 401) {
+    if (status === 401 && !isLoginRequest) {
       // 同时清除 Pinia store（响应式 token）和 localStorage，
       // 否则 auth.isLoggedIn 仍为 true，router.push('/login') 会被导航守卫重定向回 /dashboard
       useAuthStore().logout()
+      ElMessage.warning('登录已过期，请重新登录')
       router.push('/login').catch(() => {})
       return Promise.reject(error)
     }
 
     if (status === 403) {
-      ElMessage.error('权限不足')
+      // 显示契约文案（如「账号已被禁用，请联系管理员」），无 detail 时兜底
+      ElMessage.error(detail ?? '权限不足')
     } else if (status === 429) {
       ElMessage.warning('请求过于频繁，请稍后再试')
     } else if (status && status >= 500) {

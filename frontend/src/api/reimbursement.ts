@@ -1,10 +1,19 @@
 import client from './client'
-import type { Reimbursement, ReimbursementListResponse } from '@/types'
+import type { Reimbursement, ReimbursementListResponse, ReimbursementStatus } from '@/types'
+
+export interface ReimbursementQuery {
+  mine?: boolean
+  to_review?: boolean
+  page?: number
+  page_size?: number
+  status?: ReimbursementStatus | ''
+}
 
 // REQ-8 报销单管理（契约已就绪）
 export const reimbursementApi = {
   // mine=true 我的报销单；to_review=true 待审批列表（按 current_step 匹配角色）
-  list(params: { mine?: boolean; to_review?: boolean }) {
+  // 服务端分页/筛选：page/page_size/status（契约 REQ-8）
+  list(params: ReimbursementQuery) {
     return client.get<ReimbursementListResponse>('/reimbursements', { params })
   },
 

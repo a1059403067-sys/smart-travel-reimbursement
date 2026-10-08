@@ -120,10 +120,16 @@ async function handleApprove(row: ApprovalRow) {
 }
 
 async function handleReject(row: ApprovalRow) {
-  const { value } = await ElMessageBox.prompt('请输入驳回意见', '驳回确认', {
-    type: 'warning',
-    inputValidator: v => (v?.trim() ? true : '驳回意见不能为空'),
-  })
+  let value: string
+  try {
+    const ret = await ElMessageBox.prompt('请输入驳回意见', '驳回确认', {
+      type: 'warning',
+      inputValidator: v => (v?.trim() ? true : '驳回意见不能为空'),
+    })
+    value = ret.value
+  } catch {
+    return // 用户取消
+  }
   // TODO(F13): POST /api/travel/requests/{id}/reject，comment=value
   row.status = 'rejected'
   ElMessage.success('已驳回')

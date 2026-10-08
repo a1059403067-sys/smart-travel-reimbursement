@@ -94,6 +94,9 @@ async def login(
         None, pwd_context.verify, req.password, row.password_hash
     )
     if not password_ok:
+        # TODO(限速): 登录失败限速未实现——应用层无共享存储，待部署网关（nginx rate_limit
+        # 或云 WAF）统一限流后接入；当前仅记录日志供安全审计（审核 R-09）
+        logger.warning("auth.login_failed", username=req.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
 
     token = _create_access_token(

@@ -9,6 +9,9 @@ import { useAuthStore } from '@/stores/auth'
 //   event: meta              data: {"structured_output":{...},"fallback_used":false}
 //   event: done              data: {}
 //   event: error             data: {"detail":"..."}
+// VITE_API_BASE_URL 语义与 client.ts 一致：后端源地址（不带 /api 后缀）
+const STREAM_TIMEOUT_MS = 120_000
+
 export function useSSEChat() {
   const streamingContent = ref('')
   const isStreaming = ref(false)
@@ -16,6 +19,8 @@ export function useSSEChat() {
   const progressText = ref<string | null>(null)
   const lastMeta = ref<Record<string, unknown> | null>(null)
   const error = ref<string | null>(null)
+
+  let controller: AbortController | null = null
 
   async function sendStream(
     sessionId: string,
@@ -30,7 +35,11 @@ export function useSSEChat() {
     error.value = null
 
     const auth = useAuthStore()
-    const baseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api'
+    const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? '') + '/api'
+
+    // 超时兜底：AbortController 同时服务"超时中止"与"页面卸载中止"
+    controller = new AbortController()
+    const timer = window.setTimeout(() => controller?.abort(), STREAM_TIMEOUT_MS)
 
     try {
       const response = await fetch(`${baseUrl}/chat`, {
@@ -40,10 +49,17 @@ export function useSSEChat() {
           Authorization: `Bearer ${auth.token}`,
         },
         body: JSON.stringify({ session_id: sessionId, message }),
+        signal: controller.signal,
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+        // 读后端错误 detail（契约统一 {"detail": "中文提示"}）
+        let detail = ''
+        try {
+          const body = await response.json()
+          detail = (body as { detail?: string }).detail ?? ''
+        } catch { /* body 非 JSON 时忽略 */ }
+        throw new Error(detail || `HTTP ${response.status}`)
       }
 
       const reader = response.body!.getReader()
@@ -102,11 +118,21 @@ export function useSSEChat() {
         }
       }
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : '连接失败'
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        error.value = '响应超时，请稍后重试'
+      } else {
+        error.value = e instanceof Error ? e.message : '连接失败'
+      }
     } finally {
+      window.clearTimeout(timer)
       isStreaming.value = false
+      controller = null
     }
   }
 
-  return { streamingContent, isStreaming, routingLabel, progressText, lastMeta, error, sendStream }
+  function abort() {
+    controller?.abort()
+  }
+
+  return { streamingContent, isStreaming, routingLabel, progressText, lastMeta, error, sendStream, abort }
 }

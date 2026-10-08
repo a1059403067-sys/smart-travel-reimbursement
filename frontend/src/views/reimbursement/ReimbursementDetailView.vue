@@ -87,10 +87,18 @@ const roleMatchesStep = computed(() => {
   return false
 })
 
+// R-22 修复：draft 单据仅本人可见「提交审批」（user_id 为后端返回的契约外字段，见 R-19）
+const isOwner = computed(() => {
+  const d = detail.value
+  if (d?.user_id == null) return true // 后端未返回 user_id 时不拦截（submit 接口侧有权限校验）
+  return String(d.user_id) === String(auth.user?.user_id)
+})
+
 const canAct = computed(() => {
   const d = detail.value
   if (!d) return false
-  return d.status === 'draft' || (d.status === 'pending' && roleMatchesStep.value)
+  if (d.status === 'draft') return isOwner.value
+  return d.status === 'pending' && roleMatchesStep.value
 })
 
 function statusLabel(row: Reimbursement) {
@@ -142,10 +150,16 @@ async function handleApprove() {
 
 async function handleReject() {
   if (!detail.value) return
-  const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回确认', {
-    type: 'warning',
-    inputValidator: v => (v?.trim() ? true : '驳回原因不能为空'),
-  })
+  let value: string
+  try {
+    const ret = await ElMessageBox.prompt('请输入驳回原因', '驳回确认', {
+      type: 'warning',
+      inputValidator: v => (v?.trim() ? true : '驳回原因不能为空'),
+    })
+    value = ret.value
+  } catch {
+    return // 用户取消
+  }
   acting.value = true
   try {
     await reimbursementApi.reject(detail.value.id, value)

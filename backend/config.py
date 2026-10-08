@@ -80,8 +80,10 @@ class Settings(BaseSettings):
         if self.app_env == "prod":
             if self.db_password == "postgres" or self.db_user == "postgres":
                 raise ValueError("生产环境禁止使用默认数据库凭据，请在 .env.local 中修改 DB_USER/DB_PASSWORD")
-            if self.jwt_secret_key == self.__class__.model_fields["jwt_secret_key"].default:
-                raise ValueError("生产环境必须更换 JWT 密钥")
+            # 复核小瑕疵①：jwt_secret_key 无默认值、必填校验已兜底，原"与 default 比较"是死代码；
+            # 改为有意义的长短校验（HS256 密钥 ≥32 字符才安全）
+            if len(self.jwt_secret_key) < 32:
+                raise ValueError("生产环境 JWT 密钥长度必须 ≥ 32 字符")
         return self
 
     @property

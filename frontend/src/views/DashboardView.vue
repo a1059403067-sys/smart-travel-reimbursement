@@ -32,12 +32,18 @@
         </el-col>
       </el-row>
 
-      <!-- 图表行 2：近 6 个月趋势 -->
+      <!-- 图表行 2：近 6 个月趋势 + 报销单状态分布 -->
       <el-row class="chart-row">
-        <el-col :span="24">
+        <el-col :span="12">
           <el-card shadow="hover">
             <template #header>近 6 个月差旅趋势</template>
-            <div ref="trendRef" class="chart chart-lg" />
+            <div ref="trendRef" class="chart" />
+          </el-card>
+        </el-col>
+        <el-col :span="12">
+          <el-card shadow="hover">
+            <template #header>报销单状态分布</template>
+            <div ref="statusBarRef" class="chart" />
           </el-card>
         </el-col>
       </el-row>
@@ -72,9 +78,11 @@ const statCards = computed(() => {
 const typePieRef = ref<HTMLElement>()
 const deptPieRef = ref<HTMLElement>()
 const trendRef = ref<HTMLElement>()
+const statusBarRef = ref<HTMLElement>()
 const typePieChart = useECharts(typePieRef)
 const deptPieChart = useECharts(deptPieRef)
 const lineChart = useECharts(trendRef)
+const statusBarChart = useECharts(statusBarRef)
 
 const palette = ['#1677ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1', '#13c2c2']
 
@@ -126,6 +134,25 @@ function renderCharts(d: DashboardData) {
     ],
   }
   lineChart.setOption(lineOption)
+
+  // REQ-1 第五块：报销单状态分布（五类补零）
+  const status = d.reimbursement_status ?? []
+  const statusBarOption: EChartsOption = {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 40, right: 20, top: 20, bottom: 30 },
+    xAxis: { type: 'category', data: status.map(i => i.name) },
+    yAxis: { type: 'value', minInterval: 1 },
+    series: [
+      {
+        type: 'bar',
+        barWidth: 32,
+        itemStyle: { color: '#1677ff', borderRadius: [4, 4, 0, 0] },
+        label: { show: true, position: 'top' },
+        data: status.map(i => i.value),
+      },
+    ],
+  }
+  statusBarChart.setOption(statusBarOption)
 }
 
 onMounted(async () => {
