@@ -81,3 +81,16 @@ CREATE TABLE IF NOT EXISTS approvals (
 
 CREATE INDEX IF NOT EXISTS idx_reimbursements_user_status ON reimbursements (user_id, status);
 CREATE INDEX IF NOT EXISTS idx_approvals_biz ON approvals (biz_type, biz_id);
+
+-- 对话历史（REQ-11：每用户一个持续会话 session_id = user_{id}）
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    session_id VARCHAR(128) NOT NULL,
+    role VARCHAR(16) NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    guidance JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user_session ON chat_messages (user_id, session_id, id);

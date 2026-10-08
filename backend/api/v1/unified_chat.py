@@ -23,9 +23,11 @@ import json
 import re
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from backend.agents.travel.prompts import TRIP_EXTRACT_PROMPT
@@ -38,7 +40,11 @@ from backend.core.orchestrator import AgentType, get_orchestrator
 from backend.core.providers.train import train_search
 from backend.core.providers.weather import weather_query
 from backend.core.router import IntentLabel, IntentRouter, RouteResult
-from backend.dependencies import get_current_user
+from backend.dependencies import get_current_user, get_db
+
+# 契约 REQ-11：会话固定——每用户一个持续会话（多会话切换属 P1）
+def _session_id_of(user_id: str) -> str:
+    return f"user_{user_id}"
 
 router = APIRouter(prefix="/api/chat", tags=["统一对话"])
 logger = get_logger(__name__)
@@ -306,19 +312,75 @@ async def _stream_chitchat(req: UnifiedChatRequest, current_user: dict):
 # ──────────────────────────────────────────────────────────────
 
 
-@router.post("", summary="统一对话入口（意图路由 + SSE 流式）")
+@router.post("", summary="统一对话入口（意图路由 + SSE 流式，流结束落库历史）")
 async def unified_chat(
     req: UnifiedChatRequest,
     current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """POST /api/chat（契约 REQ-5）。事件序列随路由结果不同（见文件头帧说明）。"""
+    """POST /api/chat（契约 REQ-5）。
+
+    流结束前按契约 REQ-11 落库历史：user 消息 + assistant 最终回复
+    （token 累积文本 + guidance 卡片数组）；落库失败只记日志，不影响流。
+    会话固定：session_id = user_{user_id}（前端传参忽略，多会话 P1 再做）。
+    """
     set_llm_user_id(current_user["user_id"])  # 限流身份注入（子 task 自动继承）
 
     async def event_generator():
+        # ── 帧累积（REQ-11 落库原料；子流透传帧也经 _collect 归集）──
+        collected_content: list[str] = []
+        collected_guidance: list[dict] = []
+        error_detail: str | None = None
+
+        def _collect(data: dict) -> None:
+            nonlocal error_detail
+            t = data.get("type")
+            if t == "token":
+                collected_content.append(data.get("content", ""))
+            elif t == "guidance":
+                collected_guidance.append({
+                    "message": data.get("message", ""),
+                    "action_label": data.get("action_label", ""),
+                    "action_url": data.get("action_url", ""),
+                })
+            elif t == "error":
+                error_detail = data.get("detail", "")
+
+        async def _persist() -> None:
+            """落库本轮对话；失败只记日志，绝不打断 SSE 流（对话主链路优先）。"""
+            try:
+                sid = _session_id_of(current_user["user_id"])
+                uid = int(current_user["user_id"])
+                await db.execute(text(
+                    "INSERT INTO chat_messages (user_id, session_id, role, content) "
+                    "VALUES (:uid, :sid, 'user', :content)"
+                ), {"uid": uid, "sid": sid, "content": req.message})
+                assistant_content = "".join(collected_content)
+                if error_detail and not assistant_content:
+                    assistant_content = error_detail
+                await db.execute(text(
+                    "INSERT INTO chat_messages (user_id, session_id, role, content, guidance) "
+                    "VALUES (:uid, :sid, 'assistant', :content, :guidance)"
+                ), {
+                    "uid": uid, "sid": sid, "content": assistant_content,
+                    "guidance": json.dumps(collected_guidance, ensure_ascii=False)
+                    if collected_guidance else None,
+                })
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                logger.warning("unified_chat.persist_failed", error=str(exc))
+
+        def _emit(data: dict) -> dict:
+            """累积帧（供落库）+ 包装为 sse 格式；同步函数，勿改 async。"""
+            _collect(data)
+            return _sse(data)
+
         # ── Step 0：规则前置拦截（零 Token 模板回复）──
         pre_reply = _pre_filter(req.message)
         if pre_reply is not None:
-            yield _sse({"type": "token", "content": pre_reply})
+            yield _emit({"type": "token", "content": pre_reply})
+            await _persist()
             yield _sse({"type": "done"})
             return
 
@@ -328,7 +390,7 @@ async def unified_chat(
                     label=result.label.value, routed_by=result.routed_by)
 
         # ── Step 2：推送路由决策帧（前端显示"已转接 XX"）──
-        yield _sse({
+        yield _emit({
             "type": "routing_decision",
             "label": result.label.value,
             "label_display": _LABEL_DISPLAY.get(result.label, result.label.value),
@@ -337,30 +399,76 @@ async def unified_chat(
             "fallback_used": result.fallback_used,
         })
 
-        # ── Step 3：按 label 分发 ──
+        # ── Step 3：按 label 分发（子流透传帧先经 _collect 归集再推送）──
         if result.label == IntentLabel.TRAVEL_APPLY:
             async for event in _stream_travel_agent(req, current_user):
+                _collect(json.loads(event["data"]))
                 yield event
         elif result.label == IntentLabel.WEATHER_TICKET:
             async for event in _stream_weather_ticket(req, current_user):
+                _collect(json.loads(event["data"]))
                 yield event
         elif result.label == IntentLabel.CHITCHAT:
             async for event in _stream_chitchat(req, current_user):
+                _collect(json.loads(event["data"]))
                 yield event
         elif result.label in _GUIDANCE:
             guidance = _GUIDANCE[result.label]
-            yield _sse({
+            yield _emit({
                 "type": "guidance",
                 "message": guidance["message"],
                 "action_label": guidance["action_label"],
                 "action_url": guidance["action_url"],
             })
         else:  # 理论不可达（router 保证 label 合法）；防御性兜底
-            yield _sse({"type": "error", "detail": "无法识别您的请求，请换个说法试试。"})
+            yield _emit({"type": "error", "detail": "无法识别您的请求，请换个说法试试。"})
 
+        await _persist()
         yield _sse({"type": "done"})
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/history", summary="对话历史（契约 REQ-11：before_id 游标分页）")
+async def chat_history(
+    limit: int = Query(default=3, ge=1, le=50, description="返回条数（消息条数，默认 3）"),
+    before_id: int | None = Query(default=None, ge=1, description="游标：返回 id < before_id 的更早消息；缺省最新"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """按 id 倒序取 limit+1 判 has_more，再翻转为升序（旧→新）返回，前端直接追加渲染。"""
+    sid = _session_id_of(current_user["user_id"])
+    uid = int(current_user["user_id"])
+    cond = "AND id < :before_id" if before_id else ""
+    params: dict = {"uid": uid, "sid": sid, "limit": limit + 1}
+    if before_id:
+        params["before_id"] = before_id
+
+    rows = (await db.execute(text(
+        f"""
+        SELECT id, role, content, guidance, created_at
+        FROM chat_messages
+        WHERE user_id = :uid AND session_id = :sid {cond}
+        ORDER BY id DESC
+        LIMIT :limit
+        """
+    ), params)).all()
+
+    has_more = len(rows) > limit
+    rows = list(reversed(rows[:limit]))  # 升序：旧→新
+    items = [
+        {
+            "id": int(r.id),
+            "role": r.role,
+            "content": r.content or "",
+            "guidance": r.guidance,  # JSONB 自动反序列化为 list/dict 或 None
+            "created_at": r.created_at.isoformat() if r.created_at else "",
+        }
+        for r in rows
+    ]
+    logger.info("unified_chat.history_queried", user_id=current_user["user_id"],
+                count=len(items), has_more=has_more)
+    return {"items": items, "has_more": has_more}
 
 
 if __name__ == "__main__":
@@ -389,7 +497,11 @@ if __name__ == "__main__":
     async def main():
         import httpx
 
+        from backend.db.migrations import run_migrations
         from backend.main import app
+
+        # 建表（幂等）：历史场景依赖 chat_messages 表（REQ-11）
+        await run_migrations()
 
         # 登录拿 token（种子账号，需 PG 可用；仅对话接口需要 JWT）
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -454,6 +566,51 @@ if __name__ == "__main__":
                 print(f"[7 无Token] HTTP {resp.status_code}")
                 assert resp.status_code == 401
 
-            print("\n断言通过 ✅：统一对话 6 个意图场景 SSE 帧序列全部符合契约 REQ-5")
+            # ── 对话历史场景（REQ-11，A-17）──
+            from backend.dependencies import AsyncSessionLocal
+            from sqlalchemy import text as sql_text
+
+            # 幂等清理：删测试用户历史（保证重复运行断言一致）
+            async with AsyncSessionLocal() as db:
+                await db.execute(sql_text(
+                    "DELETE FROM chat_messages WHERE user_id = "
+                    "(SELECT id FROM users WHERE username = 'zhangwei')"
+                ))
+                await db.commit()
+
+            # 8) 发"你好"（规则拦截）→ 落库 user+assistant 两条
+            await chat("你好")
+            r = await client.get("/api/chat/history", headers=headers)
+            h = r.json()
+            assert len(h["items"]) == 2 and h["items"][0]["role"] == "user" and h["items"][0]["content"] == "你好"
+            assert h["items"][1]["role"] == "assistant" and "差旅管理智能助手" in h["items"][1]["content"]
+            print(f"[8 落库] {r.status_code} 2 条（user+assistant），升序旧→新")
+
+            # 9) 发发票问题（guidance 卡片）→ assistant 历史含 guidance 数组
+            await chat("这张发票能报销吗")
+            r = await client.get("/api/chat/history?limit=10", headers=headers)
+            h = r.json()
+            assert len(h["items"]) == 4
+            last = h["items"][-1]
+            assert last["role"] == "assistant" and last["guidance"]
+            assert last["guidance"][0]["action_url"] == "/reimbursement"
+            print(f"[9 guidance 落库] {r.status_code} 最新一轮 guidance={last['guidance'][0]['action_label']}")
+
+            # 10) 游标分页：limit=3 取最新 3 条 + has_more；before_id 翻到更早 1 条
+            r = await client.get("/api/chat/history", headers=headers)
+            h = r.json()
+            assert len(h["items"]) == 3 and h["has_more"] is True
+            oldest_id = h["items"][0]["id"]
+            r = await client.get(f"/api/chat/history?before_id={oldest_id}", headers=headers)
+            h2 = r.json()
+            assert len(h2["items"]) == 1 and h2["items"][0]["content"] == "你好" and h2["has_more"] is False
+            print(f"[10 游标翻页] 最新3条 has_more=True；before_id 翻到最早 1 条（你好）has_more=False")
+
+            # 11) 无 Token → 401
+            r = await client.get("/api/chat/history")
+            assert r.status_code == 401
+            print(f"[11 无Token] {r.status_code}")
+
+            print("\n断言通过 ✅：统一对话 SSE + 对话历史（REQ-11 落库/分页/翻页）全部正常")
 
     asyncio.run(main())

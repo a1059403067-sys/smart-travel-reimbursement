@@ -148,6 +148,25 @@ _MIGRATIONS: list[tuple[str, str]] = [
         "idx_approvals_biz",
         "CREATE INDEX IF NOT EXISTS idx_approvals_biz ON approvals (biz_type, biz_id)",
     ),
+    # 2026-10-09 REQ-11：对话历史（契约：每用户一个持续会话 session_id = user_{id}）
+    (
+        "chat_messages",
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            session_id VARCHAR(128) NOT NULL,
+            role VARCHAR(16) NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            guidance JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+    ),
+    (
+        "idx_chat_messages_user_session",
+        "CREATE INDEX IF NOT EXISTS idx_chat_messages_user_session "
+        "ON chat_messages (user_id, session_id, id)",
+    ),
 ]
 
 
