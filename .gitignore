@@ -1,0 +1,18 @@
+# 环境变量与密钥（模板 .env.local.txt 留档）
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# 前端
+node_modules/
+dist/
+
+# 本地模型权重
+models/
+
+# IDE
+.idea/
