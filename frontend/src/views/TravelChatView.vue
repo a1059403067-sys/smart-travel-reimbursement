@@ -27,7 +27,7 @@
       </template>
 
       <!-- 流式输出中的气泡（guidance-only 意图如 reimbursement 也会在此展示引导卡片） -->
-      <ChatBubble v-if="isStreaming || streamingContent || guidanceCards.length" role="assistant">
+      <ChatBubble v-if="isStreaming" role="assistant">
         <div v-if="routingLabel" class="routing-tag">
           <el-tag size="small" type="info">意图：{{ routingLabel }}</el-tag>
         </div>
@@ -133,6 +133,7 @@ async function loadHistory(beforeId?: number) {
       const ids = data.items.map(i => i.id)
       lastLoadedMinId.value = ids.length ? Math.min(...ids) : undefined
       await scrollToBottom(false)
+      await ensureScrollable()
     } catch {
       // REQ-11 未就绪（404）时静默：空历史，不影响正常聊天
       hasMore.value = false
@@ -164,6 +165,19 @@ async function loadHistory(beforeId?: number) {
     hasMore.value = false
   } finally {
     loadingMore.value = false
+  }
+  await ensureScrollable()
+}
+
+// 首屏 3 条可能撑不满一屏（无滚动条 → scroll 事件永不触发，翻页入口失效）：
+// 内容不足一屏且还有更早历史时自动继续加载
+async function ensureScrollable() {
+  await nextTick()
+  const el = scrollRef.value
+  if (!el || !hasMore.value || loadingMore.value) return
+  if (el.scrollHeight <= el.clientHeight + 50) {
+    const before = lastLoadedMinId.value
+    if (before != null) await loadHistory(before)
   }
 }
 
