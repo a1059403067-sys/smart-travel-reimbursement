@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS travel_requests (
     estimated_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
     itinerary JSONB,
     approver_id INTEGER,
+    reject_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

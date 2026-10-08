@@ -74,9 +74,15 @@ _MIGRATIONS: list[tuple[str, str]] = [
             estimated_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
             itinerary JSONB,
             approver_id INTEGER,
+            reject_reason TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""",
+    ),
+    # 2026-10-09 补丁：早期建表的 travel_requests 缺 reject_reason（对齐架构方案表设计）
+    (
+        "travel_requests.reject_reason",
+        "ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS reject_reason TEXT",
     ),
     (
         "idx_travel_requests_user_status",
