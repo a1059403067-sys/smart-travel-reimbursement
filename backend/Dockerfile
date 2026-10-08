@@ -13,6 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ backend/
 COPY scripts/ scripts/
 
+# 审核 R-33：非 root 运行（python:3.11-slim 无用户，创建 appuser 并授权工作目录）
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8006
 
 # lifespan 自动执行幂等 migrations（首次启动建表）

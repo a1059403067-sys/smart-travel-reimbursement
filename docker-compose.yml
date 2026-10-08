@@ -26,14 +26,17 @@ services:
     environment:
       POSTGRES_DB: ${DB_NAME:-travel_reimbursement}
       POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      # 审核 R-32：密码必填（:?err 未配置直接启动失败），杜绝弱默认密码悄悄上线
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?请在 .env.local 设置 DB_PASSWORD（生产环境禁用弱密码）}
       PGTZ: Asia/Shanghai
     volumes:
       - travel_pg_data:/var/lib/postgresql/data
       # 容器首次启动自动执行建表脚本（幂等 IF NOT EXISTS）
       - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01_init_db.sql:ro
     ports:
-      - "5434:5432"
+      # 审核 R-32：只绑宿主机回环——backend 走容器内网访问 PG，PG 无需暴露到局域网；
+      # 本地开发直连 127.0.0.1:5434 不受影响
+      - "127.0.0.1:5434:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-travel_reimbursement}"]
       interval: 10s
@@ -55,7 +58,7 @@ services:
       DB_PORT: 5432
       DB_NAME: ${DB_NAME:-travel_reimbursement}
       DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:?请在 .env.local 设置 DB_PASSWORD（生产环境禁用弱密码）}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_MODEL_CHAT: ${DEEPSEEK_MODEL_CHAT:-deepseek-chat}
@@ -73,6 +76,7 @@ services:
       start_period: 30s
 
   # ── 前端（多阶段：node 构建 → nginx 静态托管 + /api 反代）──
+  # 审核 R-33：nginx-unprivileged 非 root 镜像，容器内监听 8080
   frontend:
     build:
       context: .
@@ -82,9 +86,9 @@ services:
     depends_on:
       - backend
     ports:
-      - "3001:80"
+      - "3001:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5

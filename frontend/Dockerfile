@@ -11,11 +11,12 @@ RUN npm config set registry https://registry.npmmirror.com && npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM nginx:alpine
+# 审核 R-33：nginx-unprivileged 非 root 镜像（容器内监听 8080，宿主映射见 docker-compose）
+FROM nginxinc/nginx-unprivileged:alpine
 
 # 构建产物
 COPY --from=build /app/dist /usr/share/nginx/html
 # nginx 配置：静态托管 + /api 反代
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 80
+EXPOSE 8080
