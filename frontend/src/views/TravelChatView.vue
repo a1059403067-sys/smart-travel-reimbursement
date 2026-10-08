@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { nextTick, onBeforeUnmount, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { v4 as uuidv4 } from 'uuid'
 import ChatBubble from '@/components/chat/ChatBubble.vue'
@@ -61,8 +61,11 @@ const draft = ref('')
 const scrollRef = ref<HTMLElement>()
 const sessionId = uuidv4() // 简单处理：每页面一个会话；后续可接入会话管理
 
-const { streamingContent, isStreaming, routingLabel, progressText, error, sendStream } =
+const { streamingContent, isStreaming, routingLabel, progressText, error, sendStream, abort } =
   useSSEChat()
+
+// 离开页面时中止进行中的流式请求（审核遗留微瑕）
+onBeforeUnmount(abort)
 
 async function scrollToBottom() {
   await nextTick()
