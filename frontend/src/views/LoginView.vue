@@ -79,7 +79,12 @@ const rules: FormRules = {
 }
 
 async function handleLogin() {
-  await formRef.value?.validate()
+  // R-36：validate 失败时静默返回（表单项已展示错误提示），避免 unhandled rejection
+  try {
+    await formRef.value?.validate()
+  } catch {
+    return
+  }
   loading.value = true
   try {
     const { data } = await authApi.login({

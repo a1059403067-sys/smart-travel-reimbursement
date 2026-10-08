@@ -191,17 +191,37 @@ async def register(
         None, pwd_context.hash, req.password
     )
 
-    # ⑤ 落库；组合唯一索引兜底并发重复 → 409（username 已去重，冲突只可能来自组合索引）
-    try:
-        await db.execute(text(
-            "INSERT INTO users (username, password_hash, real_name, department_id, role) "
-            "VALUES (:username, :hash, :real_name, :dept_id, 'employee')"
-        ), {"username": username, "hash": password_hash,
-            "real_name": req.real_name, "dept_id": dept_id})
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
+    # ⑤ 组合判重（业务层预查，409 文案准确）；唯一索引兜底并发窗口
+    async def _dup_exists() -> bool:
+        return (await db.execute(text(
+            "SELECT 1 FROM users WHERE real_name = :name AND department_id = :dept LIMIT 1"
+        ), {"name": req.real_name, "dept": dept_id})).scalar() is not None
+
+    if await _dup_exists():
         raise HTTPException(status_code=409, detail="该姓名在此部门已注册")
+
+    # ⑥ 落库（审核 R-35）：不依赖 SQLAlchemy 包装链解析约束名，
+    #    冲突后重查组合区分——组合已存在 → 409（并发窗口）；否则是 username
+    #    拼音撞名（并发同名不同部门）→ 重新生成数字后缀重试（最多 3 次）
+    for attempt in range(3):
+        try:
+            await db.execute(text(
+                "INSERT INTO users (username, password_hash, real_name, department_id, role) "
+                "VALUES (:username, :hash, :real_name, :dept_id, 'employee')"
+            ), {"username": username, "hash": password_hash,
+                "real_name": req.real_name, "dept_id": dept_id})
+            await db.commit()
+            break
+        except IntegrityError:
+            await db.rollback()
+            if await _dup_exists():
+                raise HTTPException(status_code=409, detail="该姓名在此部门已注册")
+            taken.add(username)
+            username = _generate_username(req.real_name, taken)
+            logger.warning("auth.register_username_retry", attempt=attempt, next_username=username)
+    else:
+        # 重试耗尽（理论不可达，防御性兜底）
+        raise HTTPException(status_code=409, detail="注册失败，请稍后重试")
 
     logger.info("auth.registered", username=username, department=req.department)
     return RegisterResponse(
@@ -292,7 +312,10 @@ if __name__ == "__main__":
 
             # 幂等清理：删此前自测注册的用户（演示用户 zhangsan 占拼音，analytics 自测会重建）
             async with AsyncSessionLocal() as db:
-                await db.execute(text("DELETE FROM users WHERE username IN ('zhangsan', 'zhangsan2')"))
+                await db.execute(text(
+                    "DELETE FROM users WHERE username IN ('zhangsan', 'zhangsan2') "
+                    "OR username LIKE 'chenjing%'"
+                ))
                 await db.commit()
 
             # 7) 部门列表（公开接口，无 Token）
@@ -334,6 +357,19 @@ if __name__ == "__main__":
             assert r.status_code == 200 and r.json()["real_name"] == "张三"
             print(f"[12 注册后登录] {r.status_code} real_name={r.json()['real_name']}")
 
-        print("\n断言通过 ✅：登录 / JWT 鉴权 / 角色守卫 / 注册 / 部门列表全部正常")
+            # 13) 并发同名不同部门注册（R-35 验证）：拼音撞名自动后缀，两个都 201
+            results = await asyncio.gather(
+                client.post("/api/auth/register", json={
+                    "real_name": "陈静", "department": "BIM部", "password": "Chenjing@123"}),
+                client.post("/api/auth/register", json={
+                    "real_name": "陈静", "department": "内装部", "password": "Chenjing@123"}),
+            )
+            codes = sorted(r.status_code for r in results)
+            usernames = sorted(r.json()["username"] for r in results)
+            assert codes == [201, 201], f"并发同名不同部门应都成功，实际 {codes}"
+            assert usernames == ["chenjing", "chenjing2"], f"拼音后缀应生效，实际 {usernames}"
+            print(f"[13 并发同名注册] codes={codes} usernames={usernames}（后缀重试生效）")
+
+        print("\n断言通过 ✅：登录 / JWT 鉴权 / 角色守卫 / 注册 / 部门列表 / 并发注册全部正常")
 
     asyncio.run(main())

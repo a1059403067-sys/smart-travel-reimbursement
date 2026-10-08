@@ -1,19 +1,9 @@
 <template>
   <div class="approval-list">
+    <!-- R-31 修复：审批中心 to_review 固定待审批语义，去掉状态筛选（选"已通过"等恒为空） -->
     <el-card shadow="never" class="filter-card">
-      <el-form inline @submit.prevent>
-        <el-form-item label="状态">
-          <el-select v-model="query.status" placeholder="全部" clearable style="width: 140px" @change="handleSearch">
-            <el-option label="待审批" value="pending" />
-            <el-option label="已通过" value="approved" />
-            <el-option label="已驳回" value="rejected" />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
-          <el-button :icon="Refresh" @click="handleReset">重置</el-button>
-        </el-form-item>
-      </el-form>
+      <span class="filter-tip">审批中心：展示待您审批的差旅申请</span>
+      <el-button :icon="Refresh" @click="load">刷新</el-button>
     </el-card>
 
     <el-card shadow="never">
@@ -110,7 +100,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Refresh } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import type { TravelRequest, TravelRequestStatus } from '@/types'
 import { travelApi } from '@/api/travel'
 
@@ -121,7 +111,6 @@ const detailVisible = ref(false)
 const current = ref<TravelRequest | null>(null)
 
 const query = reactive({
-  status: '' as TravelRequestStatus | '',
   page: 1,
   page_size: 10,
 })
@@ -142,7 +131,6 @@ async function load() {
   try {
     const { data } = await travelApi.requests({
       to_review: true,
-      status: query.status || undefined,
       page: query.page,
       page_size: query.page_size,
     })
@@ -159,11 +147,6 @@ async function load() {
 function handleSearch() {
   query.page = 1
   load()
-}
-
-function handleReset() {
-  query.status = ''
-  handleSearch()
 }
 
 async function showDetail(row: TravelRequest) {
@@ -216,6 +199,13 @@ onMounted(load)
 }
 .filter-card {
   margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.filter-tip {
+  font-size: 13px;
+  color: #8c8c8c;
 }
 .amount {
   color: #fa8c16;
