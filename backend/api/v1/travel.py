@@ -25,6 +25,8 @@ router = APIRouter(prefix="/api/travel/requests", tags=["差旅申请"])
 
 _ALLOWED_STATUS = {"draft", "pending", "approved", "rejected"}
 _SUBMITABLE_STATUS = {"draft", "rejected"}
+# 审核 R-26：trip_type 枚举白名单（与 analytics._TRIP_TYPE_LABELS 保持一致）
+_ALLOWED_TRIP_TYPES = {"visit", "meeting", "project", "entertain"}
 
 
 class TravelRequestCreate(BaseModel):
@@ -162,11 +164,18 @@ async def create_travel_request(
     current_user: dict = Depends(get_current_user),
 ):
     """创建申请；日期字符串 → date 对象（asyncpg 新版 DATE 列必须传 date）。"""
+    # 审核 R-26：trip_type 枚举白名单，非法值 422
+    if req.trip_type and req.trip_type not in _ALLOWED_TRIP_TYPES:
+        raise HTTPException(status_code=422,
+                            detail=f"非法行程类型 {req.trip_type}，可选：{'/'.join(sorted(_ALLOWED_TRIP_TYPES))}")
     try:
         start = date_type.fromisoformat(req.start_date) if req.start_date else None
         end = date_type.fromisoformat(req.end_date) if req.end_date else None
     except ValueError:
         raise HTTPException(status_code=422, detail="日期格式必须为 YYYY-MM-DD")
+    # 审核 R-27：日期逻辑校验（返程不得早于出发）
+    if start and end and end < start:
+        raise HTTPException(status_code=422, detail="返程日期不能早于出发日期")
 
     rid = (await db.execute(text(
         """
@@ -310,10 +319,13 @@ if __name__ == "__main__":
         await run_migrations()
         from backend.dependencies import AsyncSessionLocal
 
-        # 清空差旅申请，保证断言一致；注意 CASCADE 会连带清 reimbursements
-        # （travel_request_id FK 引用），报销自测会自行重建，账号表不受影响
+        # 清空差旅申请保证断言一致；显式清 approvals（无 FK 不参与 CASCADE，
+        # 否则旧留痕 + 序列重置后的同 id 新单会造成重复留痕）；CASCADE 连带清
+        # reimbursements（travel_request_id FK），报销自测会自行重建；账号表不受影响
         async with AsyncSessionLocal() as db:
-            await db.execute(text("TRUNCATE travel_requests RESTART IDENTITY CASCADE"))
+            await db.execute(text(
+                "TRUNCATE travel_requests, reimbursements, approvals RESTART IDENTITY CASCADE"
+            ))
             await db.commit()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -337,6 +349,16 @@ if __name__ == "__main__":
                                   headers=_auth(t_emp))
             assert r.status_code == 422
             print(f"[2 日期校验] {r.status_code}（YYYY-MM-DD 强制）")
+
+            # 2b) trip_type 白名单 + 日期逻辑校验（R-26/R-27）
+            r = await client.post("/api/travel/requests", json={"title": "x", "trip_type": "hack"},
+                                  headers=_auth(t_emp))
+            assert r.status_code == 422
+            r = await client.post("/api/travel/requests", json={
+                "title": "x", "start_date": "2026-10-20", "end_date": "2026-10-15"},
+                headers=_auth(t_emp))
+            assert r.status_code == 422
+            print(f"[2b trip_type/日期逻辑] 非法类型 422；返程早于出发 422")
 
             # 3) 我的列表（分页）
             r = await client.get("/api/travel/requests?page=1&page_size=1", headers=_auth(t_emp))

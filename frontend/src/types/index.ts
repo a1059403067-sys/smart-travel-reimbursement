@@ -73,7 +73,7 @@ export interface ReimbursementListResponse {
   total: number
 }
 
-// ── 发票解析（REQ-7，契约草案）──
+// ── 发票解析（REQ-7，契约已就绪）──
 export interface InvoiceParseResult {
   invoice: {
     invoice_date: string
@@ -83,4 +83,37 @@ export interface InvoiceParseResult {
   }
   needs_human_review: boolean
   problems: string[]
+  fallback_used: boolean
+  // text_layer（电子发票文本层）/ ocr_needed（扫描件转人工）/ parse_failed
+  source: string
+}
+
+// ── 差旅申请（REQ-6，契约已就绪，单级审批）──
+export type TravelRequestStatus = 'draft' | 'pending' | 'approved' | 'rejected'
+
+export interface TravelRequest {
+  id: number | string
+  title: string
+  status: TravelRequestStatus
+  trip_type: string
+  departure_city: string
+  arrival_city: string
+  start_date: string
+  end_date: string
+  reason: string
+  estimated_amount: number
+  user_id: number
+  user_name: string
+  department: string
+  reject_reason: string
+  created_at: string
+  updated_at: string
+  approvals?: ApprovalRecord[]
+}
+
+export interface TravelRequestListResponse {
+  items: TravelRequest[]
+  total: number
+  page: number
+  page_size: number
 }

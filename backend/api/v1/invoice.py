@@ -27,6 +27,14 @@ router = APIRouter(prefix="/api/invoice", tags=["发票"])
 _ALLOWED_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png"}
 _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB（架构方案：大小+后缀白名单）
 
+# 审核 R-29：魔数校验（文件头字节），防后缀伪装文件；解析端仍保留降级兜底
+_MAGIC_BYTES = {
+    ".pdf": b"%PDF",
+    ".png": b"\x89PNG\r\n\x1a\n",
+    ".jpg": b"\xff\xd8\xff",
+    ".jpeg": b"\xff\xd8\xff",
+}
+
 
 @router.post("/upload", summary="上传发票并解析（PDF/JPG/PNG → 结构化 JSON）")
 async def upload_invoice(
@@ -55,6 +63,13 @@ async def upload_invoice(
         )
     if not content:
         raise HTTPException(status_code=422, detail="文件内容为空")
+    # 魔数校验：文件头字节必须与后缀类型一致（R-29）
+    magic = _MAGIC_BYTES.get(suffix, b"")
+    if magic and not content.startswith(magic):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="文件内容与扩展名不符，请上传真实的发票文件",
+        )
 
     # 临时落盘（解析后立即删除；P2 invoices 表建立后改为持久化存储路径）
     fd, tmp_path = tempfile.mkstemp(suffix=suffix)
@@ -140,6 +155,12 @@ if __name__ == "__main__":
             files = {"file": ("evil.txt", b"hello", "text/plain")}
             r = await client.post("/api/invoice/upload", files=files, headers=headers)
             print(f"[3 非法后缀] {r.status_code} {r.json()['detail']}")
+            assert r.status_code == 415
+
+            # 3b) 后缀伪装（.pdf 但内容是文本）→ 415 魔数拦截（R-29）
+            files = {"file": ("fake.pdf", b"this is not a pdf", "application/pdf")}
+            r = await client.post("/api/invoice/upload", files=files, headers=headers)
+            print(f"[3b 魔数校验] {r.status_code} {r.json()['detail']}")
             assert r.status_code == 415
 
             # 4) 空文件 → 422

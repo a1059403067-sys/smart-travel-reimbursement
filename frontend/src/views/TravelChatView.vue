@@ -6,6 +6,19 @@
         <ChatBubble :role="msg.role">
           <MarkdownRenderer v-if="msg.role === 'assistant'" :content="msg.content" />
           <span v-else>{{ msg.content }}</span>
+          <!-- R-24：引导卡片（发票报销 / 数据分析等） -->
+          <div v-if="msg.guidance?.length" class="guidance-cards">
+            <el-card
+              v-for="(g, gi) in msg.guidance"
+              :key="gi"
+              shadow="hover"
+              class="guidance-card"
+              @click="router.push(g.action_url)"
+            >
+              <div class="guidance-msg">{{ g.message }}</div>
+              <el-button type="primary" size="small">{{ g.action_label || '前往' }}</el-button>
+            </el-card>
+          </div>
         </ChatBubble>
       </template>
 
@@ -45,24 +58,29 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { v4 as uuidv4 } from 'uuid'
 import ChatBubble from '@/components/chat/ChatBubble.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
-import { useSSEChat } from '@/composables/useSSEChat'
+import { useSSEChat, type GuidanceCard } from '@/composables/useSSEChat'
 
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  guidance?: GuidanceCard[]
 }
 
+const router = useRouter()
 const messages = ref<ChatMessage[]>([])
 const draft = ref('')
 const scrollRef = ref<HTMLElement>()
 const sessionId = uuidv4() // 简单处理：每页面一个会话；后续可接入会话管理
 
-const { streamingContent, isStreaming, routingLabel, progressText, error, sendStream, abort } =
-  useSSEChat()
+const {
+  streamingContent, isStreaming, routingLabel, progressText,
+  guidanceCards, error, sendStream, abort,
+} = useSSEChat()
 
 // 离开页面时中止进行中的流式请求（审核遗留微瑕）
 onBeforeUnmount(abort)
@@ -82,7 +100,11 @@ async function handleSend() {
 
   await sendStream(sessionId, text, scrollToBottom)
   if (streamingContent.value) {
-    messages.value.push({ role: 'assistant', content: streamingContent.value })
+    messages.value.push({
+      role: 'assistant',
+      content: streamingContent.value,
+      guidance: guidanceCards.value.length ? [...guidanceCards.value] : undefined,
+    })
   }
   if (error.value) {
     ElMessage.error(error.value)
@@ -127,5 +149,21 @@ async function handleSend() {
   font-size: 12px;
   color: #1677ff;
   margin-bottom: 6px;
+}
+.guidance-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+.guidance-card {
+  cursor: pointer;
+  max-width: 240px;
+}
+.guidance-msg {
+  font-size: 13px;
+  color: #595959;
+  margin-bottom: 8px;
+  line-height: 1.5;
 }
 </style>

@@ -120,6 +120,15 @@ def _pre_filter(text: str) -> str | None:
 # 二、引导卡片（需跳转功能页的意图）
 # ──────────────────────────────────────────────────────────────
 
+# 意图中文名（R-28：前端 routing_decision 卡片直接展示，不再显英文枚举）
+_LABEL_DISPLAY = {
+    IntentLabel.WEATHER_TICKET: "票务查询",
+    IntentLabel.TRAVEL_APPLY: "差旅申请",
+    IntentLabel.REIMBURSEMENT: "发票报销",
+    IntentLabel.ANALYSIS: "数据分析",
+    IntentLabel.CHITCHAT: "闲聊",
+}
+
 _GUIDANCE = {
     IntentLabel.REIMBURSEMENT: {
         "message": "检测到您需要办理发票报销。请前往「报销」页面上传发票（PDF/JPG/PNG），"
@@ -158,13 +167,16 @@ def _sse(data: dict) -> dict:
     return {"data": json.dumps(data, ensure_ascii=False)}
 
 
-def _travel_initial_state(message: str, current_user: dict) -> dict:
-    """首轮必须传全量 State（EduAgent 传参纪律，字段与 graph.py 自测一致）。"""
+def _travel_initial_state(message: str, session_id: str, current_user: dict) -> dict:
+    """首轮必须传全量 State（EduAgent 传参纪律，字段与 graph.py 自测一致）。
+
+    session_id 入 state（R-30）：P1 挂 checkpointer 后做多轮追问记忆的 thread_id 拼接。
+    """
     return {
         "messages": [HumanMessage(content=message)],
         "user_id": current_user["user_id"],
         "tenant_id": current_user["tenant_id"],
-        "session_id": "",
+        "session_id": session_id,
         "trip_reason": "", "departure_city": "", "arrival_city": "",
         "departure_date": "", "return_date": "", "missing_fields": [],
         "weather_info": "", "train_options": [], "hotel_options": [],
@@ -183,7 +195,7 @@ async def _stream_travel_agent(req: UnifiedChatRequest, current_user: dict):
     if graph is None:
         yield _sse({"type": "error", "detail": "差旅申请服务暂不可用，请稍后重试"})
         return
-    initial_state = _travel_initial_state(req.message, current_user)
+    initial_state = _travel_initial_state(req.message, req.session_id, current_user)
     # TODO(P1): core/memory.py 挂 checkpointer 后支持多轮追问；当前每轮独立执行
     pushed_stages: set[str] = set()  # 节点嵌套链会重复报 on_chain_start，progress 去重
     summary_output: dict | None = None  # summary 节点输出，供 meta 提取结构化数据
@@ -319,6 +331,7 @@ async def unified_chat(
         yield _sse({
             "type": "routing_decision",
             "label": result.label.value,
+            "label_display": _LABEL_DISPLAY.get(result.label, result.label.value),
             "reason": result.reason,
             "routed_by": result.routed_by,
             "fallback_used": result.fallback_used,

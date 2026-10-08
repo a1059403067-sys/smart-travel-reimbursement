@@ -212,3 +212,73 @@ Warn 项（R-08~R-15）可随下轮提交一并修复，不阻塞本轮放行，
 第 1 轮遗留的 **R-01（P0）仍是最高优先**：图表渲染 bug 影响所有已对接页面，请 B 优先修复并附实机截图。R-03/R-04（自测守卫/弱默认密码）次之。
 
 ⚠️ 提醒 A/B：R-01~R-15 已连续两轮未认领，如持续不处理，第 3 轮将升级所有 🔴 项为阻塞放行条件。
+
+---
+
+# 📋 Review Log — 第 3 轮（REQ-5/6/7 三大模块）
+
+> 审核时间：2026-10-09
+> 审核范围：提交 1c47283（A-07 unified_chat + orchestrator + IntentRouter）/ 9935a4e（A-08 travel API + reject_reason 补丁）/ dd9380b（A-10 invoice API）对照契约 REQ-5/6/7 终稿
+> 审核重点：SSE 帧兼容性、prompt injection 防护、上传安全、契约逐字段
+> **结论：三大模块主体通过。2 项契约 Fail（R-24/R-25）+ 5 项 Warn（R-26~R-30）。**
+
+## 一、契约校验
+
+### [Pass] REQ-6 差旅申请 — 字段完全匹配
+
+- ✅ 列表/详情/创建/submit/approve/reject 字段与契约逐项一致（含 reject_reason、approvals 留痕格式）
+- ✅ create 201 与契约一致；400/404/409/403 语义与契约一致（原子 UPDATE 同 REQ-8 已复核模式）
+- ✅ 审批留痕 biz_type='travel' 共用 approvals 表（架构方案 biz_type 通用落地）
+- ✅ reject_reason 幂等 ALTER 补丁：migrations.py + init_db.sql 同步（R-21 教训已内化）
+
+### [Pass] REQ-7 发票上传 — 字段完全匹配
+
+- ✅ 响应 invoice 四字段 + needs_human_review/problems/fallback_used/source 与契约一致（parse_invoice_file 返回结构已核对）
+- ✅ 错误码 415/413/422/401 与契约逐项一致；降级语义（扫描件 200 + needs_human_review）与契约一致
+- ✅ 后缀白名单（大小写归一）、流式限 10MB、mkstemp 随机临时名（无路径穿越）、finally 清理
+
+### [Fail] R-24 guidance 帧前端未处理（前端 B）
+
+- **问题**：契约 REQ-5 定义了 `guidance` 帧（reimbursement/analysis 引导卡片），前端 useSSEChat.ts:74-98 的 switch 无该 case——引导卡片被静默丢弃，契约"前端已兼容两种格式"声明不实（只兼容了草案帧类型）。
+- **修改建议**：useSSEChat 增加 `lastGuidance` ref + guidance case；TravelChatView 渲染卡片（action_label/action_url 跳转）；types 定义 GuidancePayload。**B-03 联调对话页前必修。**
+
+### [Fail] R-25 契约 done 语义与实现矛盾（后端 A）
+
+- **问题**：契约 REQ-5 声明"done 所有分支末尾必推"，实现中 error 帧后提前 return 不推 done（unified_chat.py:211/233）。
+- **修改建议**：契约改为"error 为终止帧（其后不推 done）"——语义更合理且前端已兼容；或代码 error 后补 done。以契约更新为准（附变更历史）。
+
+### [Pass] REQ-5 SSE 帧格式 — 主体匹配
+
+- ✅ `data: {"type":...}` 无 event 行格式与前端 useSSEChat 解析路径兼容（payload.type 分支）
+- ✅ routing_decision/progress/token/meta/done/error 字段与契约一致；json ensure_ascii=False 中文正常
+
+## 二、逻辑与安全审查
+
+### [Pass] prompt injection 防护 — 通过
+
+- ✅ 意图路由 label 经 `IntentLabel` 枚举白名单校验，非法 label → 降级 chitchat（不误执行任何业务分支）
+- ✅ LLM 调用异常全量降级 chitchat（aroute 内部 try/except 覆盖，event_generator 无裸抛路径）
+- ✅ 规则前置五类拦截零 Token；消息 max_length=2000；LLM 限流按 user_id 注入（子 task 继承）
+
+### [Pass] 三模块工程质量 — 通过
+
+- ✅ travel.py 完整复用 REQ-8 已复核模式：条件 UPDATE 原子化、require_role、参数绑定、status 白名单、日期 422、dev 守卫自测（10 场景）
+- ✅ invoice.py：临时文件 mkstemp + finally 清理、流式限大小防内存、降级不报 5xx（5 场景自测）
+- ✅ unified_chat：7 场景真 LLM 自测覆盖六意图 + 401；error 帧中文文案；orchestrator 永不抛异常
+
+### Warn 清单（R-26~R-30，不阻断）
+
+- **R-26**（A）：trip_type 无白名单校验（任意字符串入库），契约未声明枚举——建议契约 + 代码双重白名单
+- **R-27**（A）：start_date > end_date 无业务校验（仅格式 422）——建议校验或契约声明
+- **R-28**（B）：对话页"意图：weather_ticket"直显英文枚举——建议 label→中文映射
+- **R-29**（A）：发票上传仅后缀白名单，无魔数校验——P2 OCR 图片解码前建议加（当前解析端降级兜底，风险可控）
+- **R-30**（A）：session_id 未入 travel state（多轮追问记忆 P1 待办，代码有 TODO 注释；契约未承诺多轮，仅登记）
+
+## 三、第 3 轮裁决
+
+**REQ-5/6/7 三大模块主体通过。** 放行条件：
+
+1. **R-24**（B，联调 B-03 前）：useSSEChat 补 guidance 帧处理
+2. **R-25**（A）：契约 done/error 语义修正（推荐 error 为终止帧）
+
+Warn 项 R-26~R-30 随下轮排期。前端 B-03/B-04/B-05 联调后，本审核员将对前端对接做第 4 轮契约核对。
