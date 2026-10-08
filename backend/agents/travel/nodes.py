@@ -168,8 +168,11 @@ async def plan_summary_node(state: TravelState) -> dict:
         hotels=_format_hotels(hotels),
     )
     try:
-        resp = await get_llm("travel").ainvoke(prompt)
-        summary = resp.content if hasattr(resp, "content") else str(resp)
+        # astream 流式拼接：unified_chat 的 astream_events 依赖流式事件推 token（ainvoke 无 stream 事件）
+        summary = ""
+        async for chunk in get_llm("travel").astream(prompt):
+            if chunk.content:
+                summary += chunk.content
     except Exception as exc:
         logger.warning("travel.summary_failed", error=str(exc))
         summary = "申请单生成失败，请稍后重试或联系管理员人工处理。"
