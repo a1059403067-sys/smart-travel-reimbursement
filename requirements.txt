@@ -1,0 +1,20 @@
+# 项目直接依赖（版本与 corp_travel_mate 沙箱实测一致，2026-10-09 生成）
+# 注意：bcrypt 必须 <5 —— 5.x 与 passlib 1.7.4 不兼容（72 字节截断行为变更，见协作记录踩坑）
+fastapi==0.143.0
+uvicorn==0.54.0
+sqlalchemy==2.1.4
+asyncpg==0.32.0
+greenlet==3.5.6
+PyJWT==2.15.1
+bcrypt==4.3.0
+passlib==1.7.4
+pydantic==2.14.0
+pydantic-settings==2.15.0
+python-dotenv==1.2.4
+httpx==0.28.1
+langchain-core==1.6.7
+langchain-openai==1.6.7
+langgraph==1.2.14
+pymupdf==1.28.2
+python-multipart==0.0.32
+sse-starlette==3.5.0

@@ -1,0 +1,11 @@
+# Docker 构建上下文忽略（build context = 项目根）
+.git
+.idea
+__pycache__
+*.pyc
+.env.local
+.ocr_tmp
+frontend/node_modules
+frontend/dist
+frontend/screenshots
+**/__pycache__

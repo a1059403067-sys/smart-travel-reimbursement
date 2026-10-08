@@ -1,0 +1,93 @@
+# docker-compose.yml — 智能差旅报销系统（A-11）
+#
+# 启动：docker compose --env-file .env.local up -d --build
+# 显式项目名：目录名为中文时 compose 无法推导项目名（project name must not be empty）
+
+name: travel-reimburse
+
+#
+# 端口规划（端口偏移约定，避开本机占用）：
+#   - PG 宿主 5434（本机 5432 已占、EduAgent 5433 已占）
+#   - backend 8006
+#   - frontend 3001（nginx 静态 + /api 反代 backend）
+#
+# 架构方案 nginx 职责由 frontend 镜像内 nginx 承担（静态托管 + 反代），
+# 避免单列 nginx 服务所需的 dist 卷共享复杂度。
+#
+# 注意：backend 的 DB_* 在容器内指向 postgres 服务名（覆盖 .env.local 的
+# 宿主机视角 localhost:5433），DEEPSEEK/JWT 等密钥仍从 .env.local 注入。
+
+services:
+  # ── PostgreSQL 15（独立实例，解决与 EduAgent 共用 5433 的问题）──
+  postgres:
+    image: postgres:15-alpine
+    container_name: travel_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-travel_reimbursement}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      PGTZ: Asia/Shanghai
+    volumes:
+      - travel_pg_data:/var/lib/postgresql/data
+      # 容器首次启动自动执行建表脚本（幂等 IF NOT EXISTS）
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01_init_db.sql:ro
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-travel_reimbursement}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 后端 FastAPI（build 项目根上下文；依赖 .env.local 注入密钥）──
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: travel_backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8006
+      DB_HOST: postgres          # 容器内服务名（覆盖宿主机 localhost）
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-travel_reimbursement}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL_CHAT: ${DEEPSEEK_MODEL_CHAT:-deepseek-chat}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8006:8006"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8006/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── 前端（多阶段：node 构建 → nginx 静态托管 + /api 反代）──
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: travel_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3001:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  travel_pg_data:
