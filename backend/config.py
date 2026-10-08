@@ -20,7 +20,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +73,16 @@ class Settings(BaseSettings):
         if not v or not v.strip():
             raise ValueError("必填配置不能为空，请在项目根目录 .env.local 中填写")
         return v
+
+    @model_validator(mode="after")
+    def _prod_guards(self):
+        """生产环境强校验（审核 R-04）：弱默认凭据直接启动失败。"""
+        if self.app_env == "prod":
+            if self.db_password == "postgres" or self.db_user == "postgres":
+                raise ValueError("生产环境禁止使用默认数据库凭据，请在 .env.local 中修改 DB_USER/DB_PASSWORD")
+            if self.jwt_secret_key == self.__class__.model_fields["jwt_secret_key"].default:
+                raise ValueError("生产环境必须更换 JWT 密钥")
+        return self
 
     @property
     def database_url(self) -> str:

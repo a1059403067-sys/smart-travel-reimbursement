@@ -61,6 +61,9 @@ def _create_access_token(data: dict, expires_minutes: int) -> str:
     payload = data.copy()  # 拷一份，避免改到原字典
     expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
     payload["exp"] = expire  # exp 是 JWT 标准的过期字段
+    # 审核 R-09：声明签发方/接收方，与 get_current_user 的校验配对
+    payload["iss"] = "travel-reimburse-api"
+    payload["aud"] = "travel-reimburse-web"
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
@@ -74,7 +77,7 @@ async def login(
     result = await db.execute(
         text(
             "SELECT id, password_hash, role, tenant_id, is_active, real_name "
-            "FROM users WHERE username = :val OR email = :val LIMIT 1"
+            "FROM users WHERE username = :val OR email = :val ORDER BY id LIMIT 1"
         ),
         {"val": req.username},
     )

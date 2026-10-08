@@ -193,16 +193,19 @@ async def submit_reimbursement(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    row = (await db.execute(text(
-        "SELECT user_id, status FROM reimbursements WHERE id = :rid"
-    ), {"rid": rid})).one_or_none()
-    if row is None or str(row.user_id) != current_user["user_id"]:
-        raise HTTPException(status_code=404, detail="报销单不存在")
-    if row.status not in _SUBMITABLE_STATUS:
+    # 审核 R-20：条件 UPDATE 原子化（归属+状态双条件），并发重复提交只有一次生效
+    result = await db.execute(text(
+        "UPDATE reimbursements SET status = 'pending', current_step = 1, updated_at = NOW() "
+        "WHERE id = :rid AND user_id = :uid AND status IN ('draft', 'rejected')"
+    ), {"rid": rid, "uid": int(current_user["user_id"])})
+    if result.rowcount == 0:
+        # 区分三种失败：不存在（404）/非本人（404）/状态不可提交（400）
+        row = (await db.execute(text(
+            "SELECT user_id, status FROM reimbursements WHERE id = :rid"
+        ), {"rid": rid})).one_or_none()
+        if row is None or str(row.user_id) != current_user["user_id"]:
+            raise HTTPException(status_code=404, detail="报销单不存在")
         raise HTTPException(status_code=400, detail=f"当前状态 {row.status} 不可提交")
-    await db.execute(text(
-        "UPDATE reimbursements SET status = 'pending', current_step = 1, updated_at = NOW() WHERE id = :rid"
-    ), {"rid": rid})
     await db.commit()
     logger.info("reimb.submitted", user_id=current_user["user_id"], id=rid)
     return await _fetch_one_or_404(db, rid, current_user)
@@ -224,18 +227,27 @@ async def approve_reimbursement(
 
     role, uid, step = current_user["role"], int(current_user["user_id"]), int(row.current_step)
     # 角色与级别匹配：一级只能 approver/admin 审；二级只能 finance/admin 审
+    # 审核 R-20：条件 UPDATE 原子化（status+current_step 双条件），
+    # 并发审批只有一个请求 rowcount=1 并留痕，另一个 rowcount=0 → 409
     if step == 1 and role in ("approver", "admin"):
-        await db.execute(text(
-            "UPDATE reimbursements SET current_step = 2, approver_id = :uid, updated_at = NOW() WHERE id = :rid"
+        result = await db.execute(text(
+            "UPDATE reimbursements SET current_step = 2, approver_id = :uid, updated_at = NOW() "
+            "WHERE id = :rid AND status = 'pending' AND current_step = 1"
         ), {"uid": uid, "rid": rid})
         new_step = 2
     elif step == 2 and role in ("finance", "admin"):
-        await db.execute(text(
-            "UPDATE reimbursements SET status = 'approved', finance_reviewer_id = :uid, updated_at = NOW() WHERE id = :rid"
+        result = await db.execute(text(
+            "UPDATE reimbursements SET status = 'approved', finance_reviewer_id = :uid, updated_at = NOW() "
+            "WHERE id = :rid AND status = 'pending' AND current_step = 2"
         ), {"uid": uid, "rid": rid})
         new_step = 2  # 终审通过，留痕仍记 step=2
     else:
         raise HTTPException(status_code=403, detail=f"您的角色 {role} 不能审批第 {step} 级")
+
+    if result.rowcount == 0:
+        # 条件不满足 = 被并发改过（他人已审/已驳回），返回冲突并放弃留痕
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="单据状态已变化，请刷新后重试")
 
     await db.execute(text(
         "INSERT INTO approvals (biz_type, biz_id, step, approver_id, action) "
@@ -261,10 +273,16 @@ async def reject_reimbursement(
     if row.status != "pending":
         raise HTTPException(status_code=400, detail=f"当前状态 {row.status} 不在审批中")
 
+    # 审核 R-20：条件 UPDATE 原子化，与 approve 并发时只有一方生效
     uid = int(current_user["user_id"])
-    await db.execute(text(
-        "UPDATE reimbursements SET status = 'rejected', reject_reason = :reason, updated_at = NOW() WHERE id = :rid"
+    result = await db.execute(text(
+        "UPDATE reimbursements SET status = 'rejected', reject_reason = :reason, updated_at = NOW() "
+        "WHERE id = :rid AND status = 'pending'"
     ), {"rid": rid, "reason": req.reason})
+    if result.rowcount == 0:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="单据状态已变化，请刷新后重试")
+
     await db.execute(text(
         "INSERT INTO approvals (biz_type, biz_id, step, approver_id, action, comment) "
         "VALUES ('reimbursement', :rid, :step, :uid, 'reject', :reason)"
@@ -294,8 +312,13 @@ if __name__ == "__main__":
     async def main():
         import httpx
 
+        from backend.config import get_settings
         from backend.db.migrations import run_migrations
         from backend.main import app
+
+        # 审核 R-03：破坏性自测（TRUNCATE）仅允许 dev 环境
+        if get_settings().app_env != "dev":
+            raise RuntimeError("本自测含 TRUNCATE，仅允许在 app_env=dev 环境运行")
 
         await run_migrations()
         from backend.dependencies import AsyncSessionLocal
@@ -382,6 +405,24 @@ if __name__ == "__main__":
             assert r.status_code == 200
             print("[11 筛选/可见性] approved=1；admin 可见他人单据")
 
-            print("\n断言通过 ✅：REQ-8 报销单状态机 / 两级审批 / 角色守卫 / 筛选分页全部正常")
+            # 12) 并发审批（审核 R-20 验证）：两个财务并发通过同一张二级单据
+            #     → 一个成功；另一个按竞态交错返回 400（读到已审批）或 409（条件更新落空），
+            #     留痕始终只有 2 条（无双重留痕）
+            r = await client.post("/api/reimbursements", json={"title": "并发审批验证单", "total_amount": 100.0},
+                                  headers=_auth(t_emp))
+            r3 = r.json()
+            await client.post(f"/api/reimbursements/{r3['id']}/submit", headers=_auth(t_emp))
+            await client.post(f"/api/reimbursements/{r3['id']}/approve", headers=_auth(t_appr))
+            codes = await asyncio.gather(
+                client.post(f"/api/reimbursements/{r3['id']}/approve", headers=_auth(t_fin)),
+                client.post(f"/api/reimbursements/{r3['id']}/approve", headers=_auth(t_fin)),
+            )
+            code_set = sorted(c.status_code for c in codes)
+            assert code_set in ([200, 400], [200, 409]), f"并发审批应一成一败，实际 {code_set}"
+            detail = await client.get(f"/api/reimbursements/{r3['id']}", headers=_auth(t_emp))
+            assert len(detail.json()["approvals"]) == 2  # 经理 1 条 + 成功财务 1 条
+            print(f"[12 并发审批] codes={code_set} 留痕={len(detail.json()['approvals'])} 条（无双重留痕）")
+
+            print("\n断言通过 ✅：REQ-8 报销单状态机 / 两级审批 / 角色守卫 / 筛选分页 / 并发安全全部正常")
 
     asyncio.run(main())

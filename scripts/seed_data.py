@@ -19,6 +19,10 @@ if not hasattr(_b, "__about__"):
     _b.__about__ = _t.SimpleNamespace(__version__=getattr(_b, "__version__", "4.x"))
 
 s = get_settings()
+if s.app_env == "prod":
+    # 审核 R-08：弱演示密码只允许在非生产环境灌入
+    raise RuntimeError("禁止在生产环境运行种子脚本（演示账号密码为弱口令，仅本地开发用）")
+
 # asyncpg 连接串（注意 asyncpg 用 postgresql:// 而非 +asyncpg）
 DB_DSN = (
     f"postgresql://{s.db_user}:{s.db_password}"
@@ -41,7 +45,10 @@ SEED_USERS = [
 
 
 async def seed_all() -> None:
-    """灌入部门 + 测试账号（已存在则跳过），并打印账号清单。"""
+    """灌入部门 + 测试账号（已存在则跳过），并打印账号清单。
+
+    打印明文密码仅本地开发方便复制（生产禁跑，见模块级守卫）。
+    """
     conn = await asyncpg.connect(DB_DSN)
     try:
         # 部门（name 唯一索引兜底幂等）

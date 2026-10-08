@@ -42,7 +42,11 @@ async def lifespan(app: FastAPI):
 
         await run_migrations()
     except Exception as e:
-        logger.warning("app.migrations_failed | error=%s", e)  # 迁移失败只告警，不拦启动
+        # 审核 R-10：dev 只告警；prod 迁移失败必须阻断启动（schema 落后时接口 500 无信号更危险）
+        if settings.app_env == "prod":
+            logger.error("app.migrations_failed | error=%s", e)
+            raise
+        logger.warning("app.migrations_failed | error=%s", e)  # dev 告警不拦启动
 
     logger.info("app.started")
     yield
@@ -58,11 +62,12 @@ app = FastAPI(
     lifespan=lifespan,  # 挂生命周期钩子
 )
 
-# CORS：允许前端开发端口跨域访问（与 EduAgent 同款白名单）
+# CORS：允许前端开发端口跨域访问（与 EduAgent 同款白名单；审核 R-06：补 localhost:3001）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000", "http://localhost:5173", "http://localhost:8080",
+        "http://localhost:3001",
         "http://127.0.0.1:3001", "http://127.0.0.1:5173", "http://127.0.0.1:8080",
     ],
     allow_credentials=True,

@@ -47,28 +47,35 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 # ── JWT 鉴权 ───────────────────────────────────────────────────
-# bearer_scheme：自动从请求头解析 "Authorization: Bearer <token>"，缺失/格式错直接 401
+# bearer_scheme(auto_error=False)：缺失/格式错时不抛 FastAPI 内置英文 401
+# （审核 R-05："Not authenticated" 违反契约"错误响应统一中文"），
+# 改由 get_current_user 统一抛中文文案。
 
-bearer_scheme = HTTPBearer()
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict:
     """FastAPI 依赖：验证 JWT，返回 {"user_id": str, "role": str, "tenant_id": str}。
 
-    Token 无效（签名错/过期/缺 sub）一律 401。
+    Token 缺失/无效（签名错/过期/缺 sub）一律 401 中文文案。
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="无效的认证凭证",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    if credentials is None:
+        raise credentials_exception
     try:
         payload = jwt.decode(
             credentials.credentials,
             settings.jwt_secret_key,
             algorithms=[settings.jwt_algorithm],
+            # 审核 R-09：校验签发方/接收方，防 token 跨系统挪用
+            issuer="travel-reimburse-api",
+            audience="travel-reimburse-web",
         )
         user_id: str = payload.get("sub")
         role: str = payload.get("role", "employee")

@@ -81,7 +81,7 @@ async def travel_stats(
     total_trips: int = int(row.trips or 0)
     total_amount: float = round(float(row.amount or 0), 2)
 
-    # ② 各部门招待费占比（JOIN users → departments，未分配部门的兜底为"未分配部门"）
+    # ② 各部门招待费占比（LEFT JOIN users → departments，孤儿/未分配部门兜底，与卡片口径一致）
     rows = (
         await db.execute(
             text(
@@ -89,7 +89,7 @@ async def travel_stats(
                 SELECT COALESCE(d.name, '未分配部门') AS department,
                        COALESCE(SUM(tr.estimated_amount), 0) AS amount
                 FROM travel_requests tr
-                JOIN users u ON tr.user_id = u.id
+                LEFT JOIN users u ON tr.user_id = u.id
                 LEFT JOIN departments d ON u.department_id = d.id
                 {where_sql}
                 GROUP BY d.name
@@ -147,7 +147,7 @@ async def travel_dashboard(
     ).one()
     total_amount: float = round(float(row.amount or 0), 2)
 
-    # ② 部门占比（与 /stats 同口径）
+    # ② 部门占比（与 /stats 同口径，LEFT JOIN 兜底）
     dept_rows = (
         await db.execute(
             text(
@@ -155,7 +155,7 @@ async def travel_dashboard(
                 SELECT COALESCE(d.name, '未分配部门') AS department,
                        COALESCE(SUM(tr.estimated_amount), 0) AS amount
                 FROM travel_requests tr
-                JOIN users u ON tr.user_id = u.id
+                LEFT JOIN users u ON tr.user_id = u.id
                 LEFT JOIN departments d ON u.department_id = d.id
                 GROUP BY d.name
                 ORDER BY amount DESC
@@ -325,6 +325,10 @@ if __name__ == "__main__":
         return user_ids
 
     async def main():
+        # 审核 R-03：破坏性自测（TRUNCATE）仅允许 dev 环境，防生产误跑清库
+        if get_settings().app_env != "dev":
+            raise RuntimeError("本自测含 TRUNCATE，仅允许在 app_env=dev 环境运行")
+
         # ① 建表（幂等） + 种子
         await run_migrations()
         from backend.dependencies import AsyncSessionLocal
