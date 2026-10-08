@@ -16,5 +16,6 @@ langchain-core==1.6.7
 langchain-openai==1.6.7
 langgraph==1.2.14
 pymupdf==1.28.2
+pypinyin==0.55.0
 python-multipart==0.0.32
 sse-starlette==3.5.0
