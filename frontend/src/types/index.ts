@@ -1,4 +1,4 @@
-// 全局类型定义（以接口契约.md 为准；字段待各接口就绪后与契约核对）
+// 全局类型定义（以接口契约.md 为准）
 
 export type Role = 'employee' | 'approver' | 'finance' | 'admin'
 
@@ -18,40 +18,8 @@ export interface LoginResponse {
   real_name: string
 }
 
-// ── 报销单（契约待 A 补充；字段来自设计图 前端2/3.png）──
-export type ReimbursementStatus = 'draft' | 'pending' | 'approved' | 'rejected'
-
-export interface ExpenseItem {
-  id?: string
-  expense_type: string // 交通费/住宿费/餐饮费/其他
-  amount: number
-  expense_date: string
-  remark?: string
-  invoice_attachment?: string | null // 发票附件路径
-}
-
-export interface Reimbursement {
-  id: string
-  code: string // 报销单号，如 BX202606001
-  reason: string // 出差事由
-  destination: string
-  start_date: string
-  end_date: string
-  amount: number
-  applicant: string
-  department: string
-  status: ReimbursementStatus
-  submitted_at: string
-  items?: ExpenseItem[]
-  approval?: {
-    approver: string
-    approved_at: string
-    status: 'approved' | 'rejected'
-    comment: string
-  }
-}
-
-// ── 统计（GET /api/travel/stats，契约已就绪）──
+// ── 统计 ──
+// REQ-4 GET /api/travel/stats（契约已就绪）
 export interface TravelStats {
   summary: {
     total_trips: number
@@ -60,7 +28,48 @@ export interface TravelStats {
   department_expense: Array<{ name: string; value: number; percentage: number }>
 }
 
-// ── 发票解析（POST /api/invoice/upload，契约草案）──
+// REQ-1 GET /api/travel/dashboard（契约已就绪）
+export interface DashboardData extends TravelStats {
+  summary: TravelStats['summary'] & {
+    pending_approvals?: number
+    month_new_trips?: number
+  }
+  monthly_trend: Array<{ month: string; trips: number; amount: number }>
+  expense_by_type: Array<{ name: string; value: number; percentage: number }>
+}
+
+// ── 报销单（REQ-8，契约已就绪）──
+// 状态机：draft → pending(一级待经理) → pending(二级待财务) → approved/rejected → paid
+export type ReimbursementStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'paid'
+
+export interface ApprovalRecord {
+  step: number
+  action: 'approve' | 'reject'
+  comment: string
+  approver_name: string
+  created_at: string
+}
+
+export interface Reimbursement {
+  id: number | string
+  title: string
+  status: ReimbursementStatus
+  current_step: number // 1=待部门经理（approver），2=待财务（finance）
+  total_amount: number
+  user_name: string
+  department: string
+  created_at: string
+  travel_request_title?: string | null // 关联差旅申请，可为 null
+  reject_reason?: string | null
+  approvals?: ApprovalRecord[]
+}
+
+export interface ReimbursementListResponse {
+  items: Reimbursement[]
+  total: number
+}
+
+// ── 发票解析（REQ-7，契约草案）──
 export interface InvoiceParseResult {
   invoice: {
     invoice_date: string

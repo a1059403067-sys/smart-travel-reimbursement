@@ -43,6 +43,12 @@ _TRIP_TYPE_LABELS = {
 # 月度趋势窗口：近 6 个月（含当月）
 _TREND_MONTHS = 6
 
+# 报销单状态 → 中文名（Dashboard 首页状态分布，契约 REQ-1 五类固定）
+_REIMB_STATUS_LABELS = {
+    "draft": "草稿", "pending": "待审批", "approved": "已通过",
+    "rejected": "已驳回", "paid": "已付款",
+}
+
 
 def _percentage(value: float, total: float) -> float:
     """占比：总额为 0 时记 0，避免除零。"""
@@ -214,8 +220,21 @@ async def travel_dashboard(
         for r in type_rows
     ]
 
+    # ⑤ 报销单状态分布（会话 B 请求：首页五类固定，缺类补 0）
+    rb_status_rows = (
+        await db.execute(
+            text("SELECT status, COUNT(*) AS cnt FROM reimbursements GROUP BY status")
+        )
+    ).all()
+    rb_counts = {r.status: int(r.cnt) for r in rb_status_rows}
+    reimbursement_status = [
+        {"name": label, "value": rb_counts.get(key, 0)}
+        for key, label in _REIMB_STATUS_LABELS.items()
+    ]
+
     logger.info("stats.dashboard_queried", trips=row.trips, amount=total_amount,
-                trend_months=len(monthly_trend), types=len(expense_by_type))
+                trend_months=len(monthly_trend), types=len(expense_by_type),
+                reimb_statuses=len(reimbursement_status))
 
     return {
         "summary": {
@@ -227,6 +246,7 @@ async def travel_dashboard(
         "department_expense": department_expense,
         "monthly_trend": monthly_trend,
         "expense_by_type": expense_by_type,
+        "reimbursement_status": reimbursement_status,
     }
 
 
@@ -245,40 +265,64 @@ if __name__ == "__main__":
     from backend.config import get_settings
     from backend.db.migrations import run_migrations
 
-    _SEED_SQL = [
-        # 部门
-        "INSERT INTO departments (name) VALUES ('研发部'), ('市场部'), ('销售部') "
-        "ON CONFLICT (name) DO NOTHING",
-        # 员工（密码哈希为占位，鉴权模块实现后替换）
-        "INSERT INTO users (username, password_hash, real_name, department_id, role) VALUES "
-        "('zhangsan', 'x', '张三', 1, 'employee'), "
-        "('lisi', 'x', '李四', 1, 'employee'), "
-        "('wangwu', 'x', '王五', 2, 'employee'), "
-        "('sunqi', 'x', '孙七', 2, 'employee'), "
-        "('zhaoliu', 'x', '赵六', 3, 'employee') "
-        "ON CONFLICT (username) DO NOTHING",
-        # 差旅申请单（trip_type: visit 拜访 / meeting 会议 / project 驻场 / entertain 招待）
-        "INSERT INTO travel_requests (user_id, title, status, trip_type, departure_city, arrival_city, "
-        "start_date, end_date, reason, estimated_amount) VALUES "
-        "(1, '拜访杭州客户', 'approved', 'visit', '北京', '杭州', '2026-10-12', '2026-10-14', '拜访客户', 3200.00), "
-        "(1, '杭州项目驻场', 'approved', 'project', '北京', '杭州', '2026-11-02', '2026-11-13', '项目驻场', 5800.00), "
-        "(2, '参加深圳技术峰会', 'approved', 'meeting', '北京', '深圳', '2026-10-20', '2026-10-22', '参加会议', 2650.00), "
-        "(3, '上海客户招待', 'approved', 'entertain', '北京', '上海', '2026-10-15', '2026-10-16', '客户招待', 4800.00), "
-        "(4, '广州客户答谢', 'approved', 'entertain', '北京', '广州', '2026-10-25', '2026-10-27', '客户招待', 3600.00), "
-        "(5, '成都商务洽谈', 'approved', 'visit', '北京', '成都', '2026-10-18', '2026-10-19', '商务洽谈', 5200.00), "
-        "(5, '重庆客户招待', 'approved', 'entertain', '北京', '重庆', '2026-11-05', '2026-11-06', '客户招待', 2100.00), "
-        "(3, '杭州市场活动', 'approved', 'meeting', '北京', '杭州', '2026-11-08', '2026-11-10', '市场活动', 3100.00) "
-        "ON CONFLICT DO NOTHING",
-    ]
-
     async def _seed(db) -> None:
-        # 自测环境先清空三表（保证重复运行断言一致）；生产路径由 seed_data.py 幂等脚本负责
+        """自测种子：只清 travel_requests（CASCADE 连带清 reimbursements/approvals）。
+
+        ⚠️ 绝不 TRUNCATE users/departments——会清掉 seed_data.py 的正式种子账号
+        （2026-10-08 双会话事故：另一窗口跑本自测清空了账号表）。
+        部门/演示用户用 ON CONFLICT DO NOTHING 幂等插入 + 回查 id 引用。
+        """
         await db.execute(sql_text(
-            "TRUNCATE travel_requests, users, departments RESTART IDENTITY CASCADE"
+            "TRUNCATE travel_requests RESTART IDENTITY CASCADE"
         ))
-        for sql in _SEED_SQL:
-            await db.execute(sql_text(sql))
+        # 部门（幂等，回查 id）
+        await db.execute(sql_text(
+            "INSERT INTO departments (name) VALUES ('研发部'), ('市场部'), ('销售部') "
+            "ON CONFLICT (name) DO NOTHING"
+        ))
+        dept_ids = {
+            r.name: int(r.id)
+            for r in (await db.execute(sql_text("SELECT id, name FROM departments"))).all()
+        }
+        # 演示员工（幂等；密码哈希占位，仅统计自测用）
+        demo_users = [
+            ("zhangsan", "张三", "研发部"), ("lisi", "李四", "研发部"),
+            ("wangwu", "王五", "市场部"), ("sunqi", "孙七", "市场部"),
+            ("zhaoliu", "赵六", "销售部"),
+        ]
+        for username, real_name, dept in demo_users:
+            await db.execute(sql_text(
+                "INSERT INTO users (username, password_hash, real_name, department_id, role) "
+                "VALUES (:u, 'x', :r, :d, 'employee') ON CONFLICT (username) DO NOTHING"
+            ), {"u": username, "r": real_name, "d": dept_ids[dept]})
+        user_ids = {
+            r.username: int(r.id)
+            for r in (await db.execute(sql_text("SELECT id, username FROM users"))).all()
+        }
+        # 差旅申请单（user_id 用回查值，不写死；trip_type: visit/meeting/project/entertain）
+        trips = [
+            ("zhangsan", "拜访杭州客户", "visit", "北京", "杭州", "2026-10-12", "2026-10-14", 3200.00),
+            ("zhangsan", "杭州项目驻场", "project", "北京", "杭州", "2026-11-02", "2026-11-13", 5800.00),
+            ("lisi", "参加深圳技术峰会", "meeting", "北京", "深圳", "2026-10-20", "2026-10-22", 2650.00),
+            ("wangwu", "上海客户招待", "entertain", "北京", "上海", "2026-10-15", "2026-10-16", 4800.00),
+            ("sunqi", "广州客户答谢", "entertain", "北京", "广州", "2026-10-25", "2026-10-27", 3600.00),
+            ("zhaoliu", "成都商务洽谈", "visit", "北京", "成都", "2026-10-18", "2026-10-19", 5200.00),
+            ("zhaoliu", "重庆客户招待", "entertain", "北京", "重庆", "2026-11-05", "2026-11-06", 2100.00),
+            ("wangwu", "杭州市场活动", "meeting", "北京", "杭州", "2026-11-08", "2026-11-10", 3100.00),
+        ]
+        from datetime import date as _date  # asyncpg 新版 DATE 列必须传 date 对象，str 会报错
+
+        for username, title, ttype, dep, arr, sdate, edate, amount in trips:
+            # 注意：title/reason 同值也必须分开传参，同一参数用于 VARCHAR 和 TEXT 两列会类型推断冲突
+            await db.execute(sql_text(
+                "INSERT INTO travel_requests (user_id, title, status, trip_type, departure_city, arrival_city, "
+                "start_date, end_date, reason, estimated_amount) VALUES "
+                "(:uid, :title, 'approved', :ttype, :dep, :arr, :sdate, :edate, :reason, :amount)"
+            ), {"uid": user_ids[username], "title": title, "ttype": ttype,
+                "dep": dep, "arr": arr, "sdate": _date.fromisoformat(sdate), "edate": _date.fromisoformat(edate),
+                "reason": title, "amount": amount})
         await db.commit()
+        return user_ids
 
     async def main():
         # ① 建表（幂等） + 种子
@@ -286,7 +330,7 @@ if __name__ == "__main__":
         from backend.dependencies import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db:
-            await _seed(db)
+            user_ids = await _seed(db)
 
         # ② httpx 直调 ASGI 应用（不走网络，验证路由与响应）
         import httpx
@@ -322,9 +366,9 @@ if __name__ == "__main__":
                 await db.execute(sql_text(
                     "INSERT INTO travel_requests (user_id, title, status, trip_type, departure_city, arrival_city, "
                     "start_date, end_date, reason, estimated_amount) VALUES "
-                    "(2, '杭州项目二期驻场', 'pending', 'project', '北京', '杭州', CURRENT_DATE, CURRENT_DATE + 10, '项目驻场', 6800.00), "
-                    "(4, '深圳客户拜访', 'pending', 'visit', '北京', '深圳', CURRENT_DATE, CURRENT_DATE + 2, '拜访客户', 2950.00)"
-                ))
+                    "(:u1, '杭州项目二期驻场', 'pending', 'project', '北京', '杭州', CURRENT_DATE, CURRENT_DATE + 10, '项目驻场', 6800.00), "
+                    "(:u2, '深圳客户拜访', 'pending', 'visit', '北京', '深圳', CURRENT_DATE, CURRENT_DATE + 2, '拜访客户', 2950.00)"
+                ), {"u1": user_ids["lisi"], "u2": user_ids["sunqi"]})
                 await db.commit()
 
             print("\n" + "=" * 60)

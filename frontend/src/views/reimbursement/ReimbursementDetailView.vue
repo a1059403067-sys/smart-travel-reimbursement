@@ -1,86 +1,162 @@
 <template>
-  <div class="reimbursement-detail" v-if="detail">
+  <div class="reimbursement-detail" v-loading="loading">
     <el-button :icon="Back" @click="router.back()" style="margin-bottom: 16px">返回</el-button>
 
-    <!-- 出差信息 -->
-    <el-card shadow="never" class="section-card">
-      <template #header>报销单详情</template>
-      <el-descriptions :column="2" border>
-        <el-descriptions-item label="报销单号">{{ detail.code }}</el-descriptions-item>
-        <el-descriptions-item label="出差事由">{{ detail.reason }}</el-descriptions-item>
-        <el-descriptions-item label="目的地">{{ detail.destination }}</el-descriptions-item>
-        <el-descriptions-item label="申请人">{{ detail.applicant }}（{{ detail.department }}）</el-descriptions-item>
-        <el-descriptions-item label="开始日期">{{ detail.start_date }}</el-descriptions-item>
-        <el-descriptions-item label="结束日期">{{ detail.end_date }}</el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="statusTagType(detail.status)">{{ statusLabel(detail.status) }}</el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="提交时间">{{ detail.submitted_at }}</el-descriptions-item>
-      </el-descriptions>
-    </el-card>
+    <template v-if="detail">
+      <!-- 报销信息 -->
+      <el-card shadow="never" class="section-card">
+        <template #header>报销单详情</template>
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="报销标题">{{ detail.title }}</el-descriptions-item>
+          <el-descriptions-item label="报销金额">
+            <span class="amount">￥{{ detail.total_amount.toLocaleString() }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="申请人">{{ detail.user_name }}（{{ detail.department }}）</el-descriptions-item>
+          <el-descriptions-item label="关联差旅申请">{{ detail.travel_request_title ?? '无' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="statusTagType(detail.status)">{{ statusLabel(detail) }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ detail.created_at }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.reject_reason" label="驳回原因" :span="2">
+            <span class="reject-reason">{{ detail.reject_reason }}</span>
+          </el-descriptions-item>
+        </el-descriptions>
+      </el-card>
 
-    <!-- 费用明细 -->
-    <el-card shadow="never" class="section-card">
-      <template #header>费用明细</template>
-      <el-table :data="detail.items ?? []" border>
-        <el-table-column prop="expense_type" label="费用类型" width="120" />
-        <el-table-column label="金额" width="120">
-          <template #default="{ row }">￥{{ row.amount.toLocaleString() }}</template>
-        </el-table-column>
-        <el-table-column prop="expense_date" label="费用日期" width="140" />
-        <el-table-column prop="remark" label="备注" min-width="120" />
-        <el-table-column label="发票附件" width="120">
-          <template #default="{ row }">
-            <el-button v-if="row.invoice_attachment" link type="primary">查看附件</el-button>
-            <span v-else class="muted">无</span>
+      <!-- 审批留痕 -->
+      <el-card v-if="detail.approvals?.length" shadow="never" class="section-card">
+        <template #header>审批信息</template>
+        <el-table :data="detail.approvals" border>
+          <el-table-column label="审批级" width="80">
+            <template #default="{ row }">{{ row.step === 2 ? '二级·财务' : '一级·经理' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="90">
+            <template #default="{ row }">
+              <el-tag :type="row.action === 'approve' ? 'success' : 'danger'" size="small">
+                {{ row.action === 'approve' ? '通过' : '驳回' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="comment" label="审批意见" min-width="160" />
+          <el-table-column prop="approver_name" label="审批人" width="110" />
+          <el-table-column prop="created_at" label="审批时间" min-width="170" />
+        </el-table>
+      </el-card>
+
+      <!-- 操作区 -->
+      <el-card v-if="canAct" shadow="never" class="section-card">
+        <template #header>操作</template>
+        <div class="actions">
+          <template v-if="detail.status === 'draft'">
+            <el-button type="primary" :loading="acting" @click="handleSubmit">提交审批</el-button>
           </template>
-        </el-table-column>
-      </el-table>
-      <div class="total-amount">合计金额：<span>￥{{ totalAmount.toLocaleString() }}</span></div>
-    </el-card>
-
-    <!-- 审批信息 -->
-    <el-card v-if="detail.approval" shadow="never" class="section-card">
-      <template #header>审批信息</template>
-      <el-descriptions :column="2" border>
-        <el-descriptions-item label="审批人">{{ detail.approval.approver }}</el-descriptions-item>
-        <el-descriptions-item label="审批时间">{{ detail.approval.approved_at }}</el-descriptions-item>
-        <el-descriptions-item label="审批状态">
-          <el-tag :type="detail.approval.status === 'approved' ? 'success' : 'danger'">
-            {{ detail.approval.status === 'approved' ? '已通过' : '已驳回' }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="审批意见">{{ detail.approval.comment || '无' }}</el-descriptions-item>
-      </el-descriptions>
-    </el-card>
+          <template v-else-if="detail.status === 'pending' && roleMatchesStep">
+            <el-button type="success" :loading="acting" @click="handleApprove">通过</el-button>
+            <el-button type="danger" :loading="acting" @click="handleReject">驳回</el-button>
+          </template>
+          <span v-else class="muted">当前状态无需操作</span>
+        </div>
+      </el-card>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Back } from '@element-plus/icons-vue'
 import type { Reimbursement, ReimbursementStatus } from '@/types'
-import { mockReimbursements } from '@/mock/reimbursements'
+import { reimbursementApi } from '@/api/reimbursement'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 
-// TODO(F13): 后端 REIM-2 就绪后，替换为 reimbursementApi.detail(route.params.id)
-const detail = ref<Reimbursement | null>(
-  mockReimbursements.find(r => r.id === route.params.id) ?? null
-)
+const loading = ref(false)
+const acting = ref(false)
+const detail = ref<Reimbursement | null>(null)
 
-const totalAmount = computed(() =>
-  (detail.value?.items ?? []).reduce((sum, i) => sum + i.amount, 0)
-)
+// 审批角色与当前步骤匹配（REQ-8）：step1 需 approver/admin，step2 需 finance/admin
+const roleMatchesStep = computed(() => {
+  const d = detail.value
+  if (!d || d.status !== 'pending') return false
+  if (d.current_step === 1) return auth.user?.role === 'approver' || auth.user?.role === 'admin'
+  if (d.current_step === 2) return auth.user?.role === 'finance' || auth.user?.role === 'admin'
+  return false
+})
 
-const statusLabel = (s: ReimbursementStatus) =>
-  ({ draft: '草稿', pending: '待审批', approved: '已通过', rejected: '已驳回' })[s] ?? s
+const canAct = computed(() => {
+  const d = detail.value
+  if (!d) return false
+  return d.status === 'draft' || (d.status === 'pending' && roleMatchesStep.value)
+})
+
+function statusLabel(row: Reimbursement) {
+  if (row.status === 'pending') {
+    return row.current_step === 2 ? '待审批·财务' : '待审批·经理'
+  }
+  return ({ draft: '草稿', approved: '已通过', rejected: '已驳回', paid: '已打款' })[row.status] ?? row.status
+}
 
 const statusTagType = (s: ReimbursementStatus) =>
-  ({ draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' })[s] as
+  ({ draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger', paid: 'success' })[s] as
     'info' | 'warning' | 'success' | 'danger'
+
+async function load() {
+  loading.value = true
+  try {
+    const { data } = await reimbursementApi.detail(route.params.id as string)
+    detail.value = data
+  } catch {
+    detail.value = null
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleSubmit() {
+  if (!detail.value) return
+  acting.value = true
+  try {
+    await reimbursementApi.submit(detail.value.id)
+    ElMessage.success('已提交审批')
+    await load()
+  } catch { /* 拦截器已提示 */ } finally {
+    acting.value = false
+  }
+}
+
+async function handleApprove() {
+  if (!detail.value) return
+  acting.value = true
+  try {
+    await reimbursementApi.approve(detail.value.id)
+    ElMessage.success('已通过')
+    await load()
+  } catch { /* 拦截器已提示 */ } finally {
+    acting.value = false
+  }
+}
+
+async function handleReject() {
+  if (!detail.value) return
+  const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回确认', {
+    type: 'warning',
+    inputValidator: v => (v?.trim() ? true : '驳回原因不能为空'),
+  })
+  acting.value = true
+  try {
+    await reimbursementApi.reject(detail.value.id, value)
+    ElMessage.success('已驳回')
+    await load()
+  } catch { /* 拦截器已提示 */ } finally {
+    acting.value = false
+  }
+}
+
+onMounted(load)
 </script>
 
 <style scoped>
@@ -90,16 +166,17 @@ const statusTagType = (s: ReimbursementStatus) =>
 .section-card {
   margin-bottom: 16px;
 }
-.total-amount {
-  margin-top: 16px;
-  text-align: right;
-  font-size: 15px;
-  color: #595959;
-}
-.total-amount span {
+.amount {
   color: #fa8c16;
-  font-size: 18px;
   font-weight: 600;
+}
+.reject-reason {
+  color: #f56c6c;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 .muted {
   color: #c0c4cc;

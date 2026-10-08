@@ -3,10 +3,10 @@
     <!-- 搜索区 -->
     <el-card shadow="never" class="search-card">
       <el-form inline @submit.prevent>
-        <el-form-item label="报销单号">
+        <el-form-item label="标题">
           <el-input
-            v-model="query.code"
-            placeholder="请输入报销单号"
+            v-model="query.title"
+            placeholder="请输入报销标题"
             clearable
             style="width: 220px"
             @keyup.enter="handleSearch"
@@ -18,6 +18,7 @@
             <el-option label="待审批" value="pending" />
             <el-option label="已通过" value="approved" />
             <el-option label="已驳回" value="rejected" />
+            <el-option label="已打款" value="paid" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -33,34 +34,28 @@
     <!-- 表格 -->
     <el-card shadow="never">
       <el-table :data="pagedItems" v-loading="loading" stripe>
-        <el-table-column prop="code" label="报销单号" min-width="130" />
-        <el-table-column prop="reason" label="出差事由" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="destination" label="目的地" width="90" />
-        <el-table-column label="出差日期" min-width="190">
-          <template #default="{ row }">{{ row.start_date }} ~ {{ row.end_date }}</template>
-        </el-table-column>
-        <el-table-column label="报销金额" width="110">
+        <el-table-column prop="title" label="报销标题" min-width="180" show-overflow-tooltip />
+        <el-table-column label="报销金额" width="120">
           <template #default="{ row }">
-            <span class="amount">￥{{ row.amount.toLocaleString() }}</span>
+            <span class="amount">￥{{ row.total_amount.toLocaleString() }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="applicant" label="申请人" width="90" />
-        <el-table-column prop="department" label="部门" width="100" />
-        <el-table-column label="状态" width="100">
+        <el-table-column prop="user_name" label="申请人" width="100" />
+        <el-table-column prop="department" label="部门" width="110" />
+        <el-table-column label="状态" width="140">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+            <el-tag :type="statusTagType(row.status)">{{ statusLabel(row) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="submitted_at" label="提交时间" min-width="170" />
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column prop="created_at" label="创建时间" min-width="170" />
+        <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="router.push(`/reimbursements/${row.id}`)">
               详情
             </el-button>
-            <template v-if="canEdit(row)">
-              <el-button link type="primary" @click="handleEdit(row)">编辑</el-button>
-              <el-button link type="success" @click="handleSubmit(row)">提交</el-button>
-            </template>
+            <el-button v-if="row.status === 'draft'" link type="success" @click="handleSubmit(row)">
+              提交
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -88,16 +83,17 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Refresh, Plus } from '@element-plus/icons-vue'
 import type { Reimbursement, ReimbursementStatus } from '@/types'
-import { mockReimbursements } from '@/mock/reimbursements'
+import { reimbursementApi } from '@/api/reimbursement'
 
 const router = useRouter()
 const loading = ref(false)
 
-// TODO(F13): 后端 REIM-1 就绪后，将 mock 替换为 reimbursementApi.list 真实分页查询
-const items = ref<Reimbursement[]>(mockReimbursements)
+// REQ-8：GET /api/reimbursements?mine=true；契约暂无分页/筛选参数，
+// TODO: 数据量大时请后端补充 page/page_size/status query，前端本地过滤仅作过渡
+const items = ref<Reimbursement[]>([])
 
 const query = reactive({
-  code: '',
+  title: '',
   status: '' as ReimbursementStatus | '',
   page: 1,
   page_size: 10,
@@ -105,7 +101,7 @@ const query = reactive({
 
 const filteredItems = computed(() =>
   items.value.filter(i =>
-    (!query.code || i.code.includes(query.code)) &&
+    (!query.title || i.title.includes(query.title)) &&
     (!query.status || i.status === query.status)
   )
 )
@@ -115,40 +111,51 @@ const pagedItems = computed(() => {
   return filteredItems.value.slice(start, start + query.page_size)
 })
 
-const statusLabel = (s: ReimbursementStatus) =>
-  ({ draft: '草稿', pending: '待审批', approved: '已通过', rejected: '已驳回' })[s] ?? s
+function statusLabel(row: Reimbursement) {
+  if (row.status === 'pending') {
+    return row.current_step === 2 ? '待审批·财务' : '待审批·经理'
+  }
+  return ({ draft: '草稿', approved: '已通过', rejected: '已驳回', paid: '已打款' })[row.status] ?? row.status
+}
 
 const statusTagType = (s: ReimbursementStatus) =>
-  ({ draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' })[s] as
+  ({ draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger', paid: 'success' })[s] as
     'info' | 'warning' | 'success' | 'danger'
 
-// 草稿/已驳回可编辑与重新提交
-const canEdit = (row: Reimbursement) => row.status === 'draft' || row.status === 'rejected'
+async function load() {
+  loading.value = true
+  try {
+    const { data } = await reimbursementApi.list({ mine: true })
+    items.value = data.items ?? []
+  } catch {
+    items.value = []
+  } finally {
+    loading.value = false
+  }
+}
 
 function handleSearch() {
   query.page = 1
 }
 
 function handleReset() {
-  query.code = ''
+  query.title = ''
   query.status = ''
   query.page = 1
 }
 
-function handleEdit(row: Reimbursement) {
-  router.push(`/reimbursements/${row.id}?edit=1`)
-}
-
 async function handleSubmit(row: Reimbursement) {
-  await ElMessageBox.confirm(`确认提交报销单 ${row.code} 进入审批流程？`, '提交确认', {
+  await ElMessageBox.confirm(`确认提交报销单「${row.title}」进入审批流程？`, '提交确认', {
     type: 'warning',
   })
-  // TODO(F13): 调用 reimbursementApi.submit(row.id)
-  row.status = 'pending'
-  ElMessage.success('已提交审批')
+  try {
+    await reimbursementApi.submit(row.id)
+    ElMessage.success('已提交审批')
+    await load()
+  } catch { /* 拦截器已提示 */ }
 }
 
-onMounted(handleSearch)
+onMounted(load)
 </script>
 
 <style scoped>

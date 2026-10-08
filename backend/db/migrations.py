@@ -92,6 +92,49 @@ _MIGRATIONS: list[tuple[str, str]] = [
         "idx_users_department",
         "CREATE INDEX IF NOT EXISTS idx_users_department ON users (department_id)",
     ),
+    # 2026-10-08 REQ-8：报销单 + 审批留痕（架构方案 reimbursements/approvals 表设计）
+    (
+        "reimbursements",
+        """
+        CREATE TABLE IF NOT EXISTS reimbursements (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            travel_request_id INTEGER REFERENCES travel_requests(id),
+            title VARCHAR(256),
+            status VARCHAR(16) NOT NULL DEFAULT 'draft',
+            current_step INTEGER NOT NULL DEFAULT 1,
+            total_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+            approver_id INTEGER,
+            finance_reviewer_id INTEGER,
+            paid_at TIMESTAMPTZ,
+            reject_reason TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+    ),
+    (
+        "approvals",
+        """
+        CREATE TABLE IF NOT EXISTS approvals (
+            id SERIAL PRIMARY KEY,
+            biz_type VARCHAR(16) NOT NULL,
+            biz_id INTEGER NOT NULL,
+            step INTEGER NOT NULL DEFAULT 1,
+            approver_id INTEGER,
+            action VARCHAR(16) NOT NULL,
+            comment TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+    ),
+    (
+        "idx_reimbursements_user_status",
+        "CREATE INDEX IF NOT EXISTS idx_reimbursements_user_status "
+        "ON reimbursements (user_id, status)",
+    ),
+    (
+        "idx_approvals_biz",
+        "CREATE INDEX IF NOT EXISTS idx_approvals_biz ON approvals (biz_type, biz_id)",
+    ),
 ]
 
 
