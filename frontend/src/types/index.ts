@@ -125,3 +125,23 @@ export interface TravelRequestListResponse {
   page: number
   page_size: number
 }
+
+// ── 对话历史（REQ-11，契约已定，后端实现中）──
+export interface ChatGuidanceCard {
+  message: string
+  action_label: string
+  action_url: string
+}
+
+export interface ChatHistoryItem {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  guidance: ChatGuidanceCard[] | null
+  created_at: string
+}
+
+export interface ChatHistoryResponse {
+  items: ChatHistoryItem[] // 按 id 升序（旧→新）
+  has_more: boolean
+}
