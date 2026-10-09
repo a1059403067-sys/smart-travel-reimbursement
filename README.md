@@ -103,7 +103,7 @@ FastAPI 后端（:8006）
 │   ├── init_db.sql             # 冷启动建表（PG 容器首启自动执行，幂等）
 │   └── seed_data.py            # 种子账号 + 10 人演示数据（幂等，prod 守卫）
 ├── docker-compose.yml          # 三容器编排（显式项目名 travel-reimburse）
-├── .env.local.txt              # 环境变量模板（复制为 .env.local 填写）
+├── .env.example                # 环境变量模板（复制为 .env.local 填写）
 ├── 架构方案.md                  # 技术落地执行方案（v1.0）
 ├── 接口契约.md                  # 前后端唯一接口事实源（REQ 编号体系）
 └── 任务看板.md                  # 双会话共享任务与进度
@@ -115,7 +115,7 @@ FastAPI 后端（:8006）
 
 ```bash
 # 1. 配置环境变量
-cp .env.local.txt .env.local
+cp .env.example .env.local
 #    必填：DB_PASSWORD、DEEPSEEK_API_KEY、JWT_SECRET_KEY（DB_USER 可留空走默认 postgres）
 
 # 2. 构建并启动三容器（PG + backend + frontend）
@@ -140,7 +140,7 @@ docker exec travel_backend python scripts/seed_data.py
 pip install -r requirements.txt          # 后端（bcrypt 必须 <5，与 passlib 1.7.4 兼容）
 
 # 2. 环境变量（同方式一）
-cp .env.local.txt .env.local             # 填 DB_PASSWORD / DEEPSEEK_API_KEY / JWT_SECRET_KEY
+cp .env.example .env.local             # 填 DB_PASSWORD / DEEPSEEK_API_KEY / JWT_SECRET_KEY
 
 # 3. 只起数据库容器（或使用本机已有 PG，改 .env.local 的 DB_* 即可）
 docker compose --env-file .env.local up -d postgres

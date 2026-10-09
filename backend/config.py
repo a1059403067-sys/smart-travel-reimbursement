@@ -2,7 +2,7 @@
 
 设计（参考 EduAgent backend/config.py）：
 
-- 从项目根目录 .env.local 读取（.env.local.txt 为模板留档，真实值不入 Git）
+- 从项目根目录 .env.local 读取（.env.example 为模板留档，真实值不入 Git）
 - 密钥类字段不设默认值 + 非空校验：缺失/为空时启动期直接报错，故障提前暴露
 - 其余字段全部带默认值，clone 后只需填 DEEPSEEK_API_KEY 即可跑
 - @lru_cache 单例 get_settings()，全项目唯一实例

@@ -1,4 +1,4 @@
-# 环境变量与密钥（模板 .env.local.txt 留档）
+# 环境变量与密钥（模板 .env.example 留档）
 .env.local
 
 # Python

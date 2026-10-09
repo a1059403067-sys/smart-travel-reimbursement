@@ -95,7 +95,7 @@
 ### [Pass] SQL 注入 / 密钥管理 — 通过
 
 - ✅ SQL 全部参数绑定：`auth.py:76`（`:val`）、`analytics.py:59/187`（`:trip_type`/`:months`）、`seed_data.py`（`$1`）；f-string 拼接的 `where_sql` 仅为固定常量串，无用户输入拼接
-- ✅ `.env.local` **未入库**（git ls-files 仅 .env.local.txt 模板）；密钥类配置必填 + 非空校验（config.py:70-75）
+- ✅ `.env.local` **未入库**（git ls-files 仅 .env.example 模板）；密钥类配置必填 + 非空校验（config.py:70-75）
 - ✅ 密码只存 bcrypt 哈希（seed_data.py 用 `pwd_context.hash`）；登录不区分"用户不存在/密码错误"防账号枚举；bcrypt 校验放线程池不阻塞事件循环
 - ✅ `get_current_user` 校验签名与 exp（PyJWT 默认）；`require_role` 返回 403 中文 detail，角色守卫覆盖审批端点（补上了 EduAgent 的坑）
 - ✅ 沙箱实测：FastAPI HTTPBearer 无 token 返回 **401**，与 auth.py 自测断言一致（自测断言本身成立）
